@@ -1,26 +1,30 @@
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:15-alpine
+services:  
+  rag_postgres:
+    image: ankane/pgvector:latest
     container_name: rag_postgres
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: supersecret
       POSTGRES_DB: rag_db
-    volumes:
-      - ./.postgres-data:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d rag_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   mongo:
     image: mongo:6.0
     container_name: rag_mongo
     environment:
-      MONGO_INITDB_ROOT_USERNAME: user
-      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_ROOT_USERNAME: myuser
+      MONGO_INITDB_ROOT_PASSWORD: supersecret
     ports:
       - "27017:27017"
     volumes:
@@ -94,4 +98,21 @@ services:
       - C:\Users\jb100\.ollama:/root/.ollama
     ports:
       - "11434:11434"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_backend
+    depends_on:
+      rag_postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the entire backend source code for live-reloading
+      - ./backend:/app/backend
+      # Mount the alembic.ini from the root into the container's app directory
+      - ./alembic.ini:/app/alembic.ini
     restart: unless-stopped

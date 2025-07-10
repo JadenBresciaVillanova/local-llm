@@ -1,5 +1,15 @@
--- Enable pgvector extension
+-- Enable pgvector extension (must be run as superuser)
 CREATE EXTENSION IF NOT EXISTS vector;
+
+-- -- Create your app user
+-- CREATE USER myuser WITH PASSWORD 'supersecret';
+
+-- -- Grant database privileges
+-- GRANT ALL PRIVILEGES ON DATABASE rag_db TO myuser;
+
+-- -- Grant usage and create privileges on schema
+-- GRANT USAGE, CREATE ON SCHEMA public TO myuser;
+
 
 -- You can pre-create your tables here if you want.
 -- This helps ensure they exist before the app starts.

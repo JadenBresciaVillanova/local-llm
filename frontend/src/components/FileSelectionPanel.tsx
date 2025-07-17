@@ -420,7 +420,15 @@ import { FaFilePdf, FaFileWord, FaFileAlt, FaSync, FaPencilAlt } from 'react-ico
 import FileUploader from './FileUploader';
 import ParameterSliders from './ParameterSliders'; // Import the new component
 
-const AVAILABLE_MODELS = ["llama3:8b", "codellama", "mistral", "dolphin-mistral:7b", "llava", "gemma:7b"];
+const AVAILABLE_MODELS = [
+    { value: "agent-mode", label: "AI Routes to Ideal Model" }, // The new Agent Mode
+    { value: "llama3:8b", label: "llama3:8b" },
+    { value: "codellama:7b", label: "codellama:7b" },
+    { value: "mistral", label: "mistral" },
+    { value: "dolphin-mistral", label: "dolphin-mistral" },
+    { value: "llava", label: "llava" },
+    { value: "gemma:7b", label: "gemma:7b" }
+];
 interface FileMetadata { id: string; file_name: string; file_type: string; }
 
 interface FileSelectionPanelProps {
@@ -482,7 +490,7 @@ export default function FileSelectionPanel({
                 <div className="pb-4 border-b border-gray-200">
                     <label htmlFor="model-select" className="text-sm font-semibold text-gray-700 block mb-2">Chat Model</label>
                     <select id="model-select" value={selectedModel} onChange={(e) => onModelChange(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm">
-                        {AVAILABLE_MODELS.map(model => (<option key={model} value={model}>{model}</option>))}
+                        {AVAILABLE_MODELS.map(model => (  <option key={model.value} value={model.value}>{model.label}</option>))}
                     </select>
                     <div className="mt-3">
                         <button onClick={onEditPrompt} className="w-full flex items-center justify-center px-4 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-100 transition-colors">

@@ -1955,7 +1955,11 @@ import PromptEditorModal from './PromptEditorModal';
 // Default Prompt Templates
 const DEFAULT_RAG_PROMPT = `You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.\nIf the answer is not in the context, just say you don't have enough information from the documents.\n\nCONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nANSWER:`;
 const DEFAULT_CODE_PROMPT = `You are an expert programmer and master of algorithms. Provide a clear, concise, and correct code solution to the user's request.\nExplain the code briefly if necessary. Use the following context if it is relevant.\n\nCONTEXT:\n{context}\n\nREQUEST:\n{question}\n\nCODE:`;
-const DEFAULT_PROMPTS: { [key: string]: string } = { "codellama": DEFAULT_CODE_PROMPT, "dolphin-mistral": DEFAULT_CODE_PROMPT, "dolphin-mistral:7b": DEFAULT_CODE_PROMPT };
+const DEFAULT_PROMPTS: { [key: string]: string } = {
+    "codellama": DEFAULT_CODE_PROMPT,
+    "dolphin-mistral": DEFAULT_CODE_PROMPT,
+    "agent-mode": DEFAULT_RAG_PROMPT, // Add this line
+};
 
 export default function ChatWindow() {
   // State for UI and parameters
@@ -1964,7 +1968,7 @@ export default function ChatWindow() {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [chatTitle, setChatTitle] = useState("");
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("llama3:8b");
+  const [selectedModel, setSelectedModel] = useState<string>("agent-mode");
   const [promptTemplateText, setPromptTemplateText] = useState<string>(DEFAULT_RAG_PROMPT);
   const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
   const [temperature, setTemperature] = useState(0.8);

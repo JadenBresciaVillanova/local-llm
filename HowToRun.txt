@@ -30,3 +30,8 @@ Scan for new or modified files and re-run the processing service only on those f
 
 add option to generate a text file of all useful code from the github repo with auto generated comments of each
 code snippets location
+
+add option to poll all components of docker container to show operational statis
+
+While ai is loading more status messages (time it takes to load, maybe what stage it is at in the routing)
+fix bug where if u go to past chats mid ai generation it deletes

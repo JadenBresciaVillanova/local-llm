@@ -63,3 +63,4 @@ def downgrade() -> None:
     # We don't need to re-create the dropped tables in a downgrade.
     # If we truly needed to revert to that state, we would downgrade
     # to the revision before this one.
+    

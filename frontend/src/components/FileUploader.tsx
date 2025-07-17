@@ -1,15 +1,15 @@
-// frontend/src/components/FileUploader.tsx
 "use client";
 
 import { useState, useCallback, DragEvent } from 'react';
+import apiClient from '../lib/api';
+import { useSession } from "next-auth/react";
 
-// Define the component's props
+// Define the component's new props
 interface FileUploaderProps {
-  onFileSelect: (file: File) => void;
+  onUploadSuccess: () => void; // A function to call when upload is done
   onClose: () => void;
 }
 
-// Supported file types
 const ACCEPTED_FILE_TYPES = {
   'application/pdf': ['.pdf'],
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
@@ -17,10 +17,12 @@ const ACCEPTED_FILE_TYPES = {
 };
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
-export default function FileUploader({ onFileSelect, onClose }: FileUploaderProps) {
+export default function FileUploader({ onUploadSuccess, onClose }: FileUploaderProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const { data: session } = useSession();
 
   const handleValidation = (file: File): boolean => {
     if (!ACCEPTED_FILE_TYPES[file.type as keyof typeof ACCEPTED_FILE_TYPES]) {
@@ -41,38 +43,38 @@ export default function FileUploader({ onFileSelect, onClose }: FileUploaderProp
       setSelectedFile(file);
     }
   };
-  
-  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && handleValidation(file)) {
-      setSelectedFile(file);
+
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); const file = e.dataTransfer.files?.[0]; if (file && handleValidation(file)) { setSelectedFile(file); } }, []);
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); };
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); };
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); };
+
+  const handleUpload = async () => {
+    if (!selectedFile || !session?.user?.email) {
+      setError("No file selected or user not logged in.");
+      return;
     }
-  }, []);
 
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-  
-  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-  
-  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
+    setIsUploading(true);
+    setError(null);
 
-  const handleSubmit = () => {
-    if (selectedFile) {
-      onFileSelect(selectedFile);
-      onClose(); // Close the modal after selection
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('user_email', session.user.email);
+
+    try {
+      // --- THIS IS THE FIX ---
+      // We removed the third argument (the config object with the headers).
+      // The browser will now correctly set the Content-Type with the required boundary.
+      await apiClient.post('/api/files/upload', formData);
+      // --- END FIX ---
+
+      onUploadSuccess();
+    } catch (err: any) {
+      console.error("File upload failed:", err);
+      setError(err.response?.data?.detail || "An unexpected error occurred during upload.");
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -81,22 +83,13 @@ export default function FileUploader({ onFileSelect, onClose }: FileUploaderProp
       <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
         <h2 className="text-xl font-bold mb-4">Upload a Document</h2>
         <div
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
+          onDrop={handleDrop} onDragOver={handleDragOver} onDragEnter={handleDragEnter} onDragLeave={handleDragLeave}
           className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
             isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
           }`}
           onClick={() => document.getElementById('file-input')?.click()}
         >
-          <input 
-            id="file-input"
-            type="file" 
-            className="hidden" 
-            accept={Object.values(ACCEPTED_FILE_TYPES).flat().join(',')}
-            onChange={handleFileChange} 
-          />
+          <input id="file-input" type="file" className="hidden" accept={Object.values(ACCEPTED_FILE_TYPES).flat().join(',')} onChange={handleFileChange} />
           <p className="text-gray-500">Drag & drop a file here, or click to select</p>
           <p className="text-xs text-gray-400 mt-1">PDF, DOCX, TXT up to 10MB</p>
         </div>
@@ -111,15 +104,15 @@ export default function FileUploader({ onFileSelect, onClose }: FileUploaderProp
         )}
 
         <div className="mt-6 flex justify-end space-x-3">
-          <button onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
+          <button onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300" disabled={isUploading}>
             Cancel
           </button>
           <button 
-            onClick={handleSubmit} 
-            disabled={!selectedFile || !!error}
+            onClick={handleUpload} 
+            disabled={!selectedFile || !!error || isUploading}
             className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:bg-blue-300 disabled:cursor-not-allowed"
           >
-            Attach File
+            {isUploading ? 'Uploading...' : 'Upload File'}
           </button>
         </div>
       </div>

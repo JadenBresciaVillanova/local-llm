@@ -39,6 +39,8 @@ psycopg-binary="3.2.9"
 psycopg2-binary="2.9.10"
 pypdf="5.7.0"
 asyncio="3.4.3"
+langchain-experimental="0.3.4"
+sentence-transformers="5.0.0"
 
 
 [tool.pylance]

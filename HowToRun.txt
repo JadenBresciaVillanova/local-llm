@@ -1,0 +1,32 @@
+Spliut Terminal
+1L. docker-compose down docker-compose up --build
+2R. cd frontend
+3R. npm run dev
+
+1. I like what you've blueprinted for 1.  Frontend drop down menu, select the model and it gets passed into the backend. 
+2. For 2, You would select the model, and then you could select a template in a similar dropdown option below, with the
+ option to edit it (maybe a pencil icon to the right of it), whihc would open a modal that you could edit which gets passed
+  to the backend (add logging to show post edit success in the backend)
+3. For 3 lets just to temp/top p/max length, and to calculate token count we can do post submission of the question the user had just sum everything once that whole process is done with.
+Lets worry about Code Execution last.
+
+For Tomorrow:
+1. Add LLM Decides Tool Mode where instead of the user specifying the model the LLM picks (add a ChatModel called "AI Chooses Model")
+gets a special "agent" prompt, uses a specific compiler/interpreter, then generates code. Then it generates a cell like in a Jupyter 
+notebook where the user can run it inside of the of the chat, or maybe like simulate a UI/Styling (would this be possible (we can skip for now and just do like running simple scripts))
+Use a docker container for a code sandbox, would it be possible to do like java, python, c++, 
+2. Pull context files from Github this way:
+How it would work:
+UI Change: In your "Context Files" panel, you would have a new section with an input field: "Load from GitHub Repo".
+User Action: The user pastes https://github.com/JadenBresciaVillanova/local-llm.git.
+Backend Process: A new API endpoint (/api/files/load_repo) would trigger the following process in the background:
+It uses a Python library like GitPython (or just os.system('git clone ...')) to clone the repository into a temporary, unique directory on your server (e.g., /app/cloned_repos/some_uuid/).
+It then walks the directory tree of the cloned repo, looking for files with specific extensions (.py, .tsx, .md, .txt, etc.).
+For each file it finds, it calls your existing ProcessingService! It passes the file path and user ID, which then handles the chunking, embedding, and storing into your PGVector database. The file metadata would include the original GitHub URL and file path.
+"Live" Sync: A true "live" sync is very complex (requiring webhooks). A much simpler and highly effective approach is to add a "Refresh" button next to the repo name in the UI. Clicking this would:
+Navigate to the already-cloned directory.
+Run git pull to get the latest changes.
+Scan for new or modified files and re-run the processing service only on those files.
+
+add option to generate a text file of all useful code from the github repo with auto generated comments of each
+code snippets location

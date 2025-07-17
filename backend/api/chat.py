@@ -865,32 +865,925 @@
         
 #     print(f"Successfully created new RAG conversation. ID: {conversation_id_str}")
 #     return ChatResponse(response=response_text, conversation_id=conversation_id_str)
+#chat.py
+# import datetime
+# import asyncio
+# from fastapi import APIRouter, Depends
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
 
+# # LangChain Imports
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_core.prompts import ChatPromptTemplate
+# from langchain_core.runnables import RunnablePassthrough
+# from langchain_core.output_parsers import StrOutputParser
+
+# # Local Imports
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# router = APIRouter()
+
+# # --- RAG Setup ---
+# OLLAMA_BASE_URL = "http://ollama:11434"
+# RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# rag_prompt_template = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+
+# # 2. A general prompt for when we DON'T have context
+# GENERAL_PROMPT_TEMPLATE = """
+# You are a helpful AI assistant. Answer the user's question based on your own knowledge.
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# general_prompt_template = ChatPromptTemplate.from_template(GENERAL_PROMPT_TEMPLATE)
+
+# # Initialize major components
+# llm = ChatOllama(model="llama3:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# # prompt_template = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+# output_parser = StrOutputParser()
+
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"Handling chat request for user: {current_user.email}")
+
+#     vectorstore = PGVector(
+#         connection_string=SYNC_DATABASE_URL,
+#         embedding_function=embeddings,
+#     )
+
+#     # # --- THE FIX: Use a Stricter Retriever ---
+#     # # We now use a different search type.
+#     # retriever = vectorstore.as_retriever(
+#     #     search_type="similarity_score_threshold",
+#     #     search_kwargs={
+#     #         "k": 3, # Still get up to 3 documents...
+#     #         "score_threshold": 0.5, # ...but ONLY if their similarity score is above this value.
+#     #         "filter": {"user_id": str(current_user.id)}
+#     #     }
+#     # )
+
+#     # --- DYNAMIC FILTERING LOGIC ---
+#     # Start with the mandatory user_id filter
+#     retriever_filter = {"user_id": str(current_user.id)}
+
+#     # If the user selected specific files, add a file_id filter.
+#     # We use the '$in' operator to match any of the provided IDs.
+#     if request.selected_file_ids:
+#         # PGVector expects a list of strings for the filter
+#         string_file_ids = [str(uuid) for uuid in request.selected_file_ids]
+#         retriever_filter["file_id"] = {"$in": string_file_ids}
+#         print(f"Applying filter: {retriever_filter}")
+
+#     # Use the dynamically created filter in the retriever
+#     retriever = vectorstore.as_retriever(
+#         search_type="similarity_score_threshold",
+#         search_kwargs={
+#             "k": 5, # You can adjust k
+#             "score_threshold": 0.45,
+#             "filter": retriever_filter # <-- USE THE DYNAMIC FILTER
+#         }
+#     )
+
+#     # Step 1: Retrieve documents FIRST
+#     # The retriever will now return an empty list for "2+2" because no chunks meet the threshold.
+#     retrieved_docs = retriever.invoke(request.prompt)
+    
+#     # Step 2: Check if any documents were found and format the context
+#     if retrieved_docs:
+#         print(f"📚 Found {len(retrieved_docs)} relevant document(s) above threshold. Using RAG prompt.")
+#         context = "\n\n---\n\n".join([doc.page_content for doc in retrieved_docs])
+#         prompt = rag_prompt_template.format(context=context, question=request.prompt)
+#     else:
+#         print("📚 No relevant documents found above threshold. Using general knowledge prompt.")
+#         prompt = general_prompt_template.format(question=request.prompt)
+        
+#     # Step 3: Invoke the LLM with the correct prompt
+#     generation_chain = (llm | output_parser)
+    
+#     print(f"Invoking LLM with final prompt...")
+#     response_text = generation_chain.invoke(prompt)
+
+#     # --- MongoDB Saving Logic ---
+#     # This logic can be simplified now that every query is a new RAG conversation.
+#     new_convo_doc = {
+#         "user_id": str(current_user.id), 
+#         "messages": [
+#             {"role": "user", "message": request.prompt},
+#             {"role": "ai", "message": response_text}
+#         ],
+#         "created_at": datetime.datetime.now(datetime.timezone.utc)
+#     }
+#     result = await mongo_db.conversations.insert_one(new_convo_doc)
+#     conversation_id_str = str(result.inserted_id)
+        
+#     print(f"Successfully created new RAG conversation. ID: {conversation_id_str}")
+#     return ChatResponse(response=response_text, conversation_id=conversation_id_str)
+
+# import datetime
+# import asyncio
+# from fastapi import APIRouter, Depends
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # LangChain Imports
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_core.prompts import ChatPromptTemplate
+# from langchain_core.runnables import RunnablePassthrough
+# from langchain_core.output_parsers import StrOutputParser
+
+# # Local Imports
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# router = APIRouter()
+
+# # --- RAG Setup ---
+# OLLAMA_BASE_URL = "http://ollama:11434"
+# RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# rag_prompt_template = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+
+# # 2. A general prompt for when we DON'T have context
+# GENERAL_PROMPT_TEMPLATE = """
+# You are a helpful AI assistant. Answer the user's question based on your own knowledge.
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# general_prompt_template = ChatPromptTemplate.from_template(GENERAL_PROMPT_TEMPLATE)
+
+# # Initialize major components
+# llm = ChatOllama(model="llama3:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# # prompt_template = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+# output_parser = StrOutputParser()
+
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"Handling chat request for user: {current_user.email}")
+
+#     vectorstore = PGVector(
+#         connection_string=SYNC_DATABASE_URL,
+#         embedding_function=embeddings,
+#     )
+
+#     # # --- THE FIX: Use a Stricter Retriever ---
+#     # # We now use a different search type.
+#     # retriever = vectorstore.as_retriever(
+#     #     search_type="similarity_score_threshold",
+#     #     search_kwargs={
+#     #         "k": 3, # Still get up to 3 documents...
+#     #         "score_threshold": 0.5, # ...but ONLY if their similarity score is above this value.
+#     #         "filter": {"user_id": str(current_user.id)}
+#     #     }
+#     # )
+
+#     # --- DYNAMIC FILTERING LOGIC ---
+#     # Start with the mandatory user_id filter
+#     retriever_filter = {"user_id": str(current_user.id)}
+
+#     # If the user selected specific files, add a file_id filter.
+#     # We use the '$in' operator to match any of the provided IDs.
+#     if request.selected_file_ids:
+#         # PGVector expects a list of strings for the filter
+#         string_file_ids = [str(uuid) for uuid in request.selected_file_ids]
+#         retriever_filter["file_id"] = {"$in": string_file_ids}
+#         print(f"Applying filter: {retriever_filter}")
+
+#     # Use the dynamically created filter in the retriever
+#     retriever = vectorstore.as_retriever(
+#         search_type="similarity_score_threshold",
+#         search_kwargs={
+#             "k": 5, # You can adjust k
+#             "score_threshold": 0.45,
+#             "filter": retriever_filter # <-- USE THE DYNAMIC FILTER
+#         }
+#     )
+
+#     # Step 1: Retrieve documents FIRST
+#     # The retriever will now return an empty list for "2+2" because no chunks meet the threshold.
+#     retrieved_docs = retriever.invoke(request.prompt)
+    
+#     # Step 2: Check if any documents were found and format the context
+#     if retrieved_docs:
+#         print(f"📚 Found {len(retrieved_docs)} relevant document(s) above threshold. Using RAG prompt.")
+#         context = "\n\n---\n\n".join([doc.page_content for doc in retrieved_docs])
+#         prompt = rag_prompt_template.format(context=context, question=request.prompt)
+#     else:
+#         print("📚 No relevant documents found above threshold. Using general knowledge prompt.")
+#         prompt = general_prompt_template.format(question=request.prompt)
+        
+#     # Step 3: Invoke the LLM with the correct prompt
+#     generation_chain = (llm | output_parser)
+    
+#     print(f"Invoking LLM with final prompt...")
+#     response_text = generation_chain.invoke(prompt)
+
+#     # --- MongoDB Saving Logic ---
+#     # This logic can be simplified now that every query is a new RAG conversation.
+#     new_convo_doc = {
+#         "user_id": str(current_user.id), 
+#         "messages": [
+#             {"role": "user", "message": request.prompt},
+#             {"role": "ai", "message": response_text}
+#         ],
+#         "created_at": datetime.datetime.now(datetime.timezone.utc)
+#     }
+#     result = await mongo_db.conversations.insert_one(new_convo_doc)
+#     conversation_id_str = str(result.inserted_id)
+        
+#     print(f"Successfully created new RAG conversation. ID: {conversation_id_str}")
+#     return ChatResponse(response=response_text, conversation_id=conversation_id_str)
+# import datetime
+# from fastapi import APIRouter, Depends, HTTPException
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # --- LangChain Imports ---
+# from langchain_core.prompts import PromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain.chains import LLMChain
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+# from langchain.retrievers.document_compressors import CrossEncoderReranker
+# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+
+# # --- Local Imports ---
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# # --- Environment Setup & Constants ---
+# router = APIRouter()
+# OLLAMA_BASE_URL = "http://ollama:11434"
+
+# # --- Prompt Templates ---
+# REWRITE_PROMPT_TEMPLATE = """
+# Based on the chat history below, formulate a standalone question that can be understood
+# without the chat history. Do NOT answer the question, just reformulate it if needed,
+# otherwise return it as is.
+
+# Chat History:
+# {chat_history}
+
+# Latest User Question:
+# {question}
+
+# Standalone Question:
+# """
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+
+# RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# rag_prompt_template = PromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+
+# # --- Initialize Core Components ---
+# print("Initializing LLM, embeddings, and re-ranker models...")
+# llm = ChatOllama(model="llama3:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# output_parser = StrOutputParser()
+
+# # --- THIS IS THE CORRECTED LINE ---
+# # Initialize the local Cross-Encoder model with the full, namespaced identifier.
+# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# print("Models initialized successfully.")
+
+
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
+#     print(f"Original question: '{request.prompt}'")
+
+#     # --- 1. QUERY REWRITING STAGE ---
+#     chat_history_str = ""
+#     if request.conversation_id:
+#         if not ObjectId.is_valid(request.conversation_id):
+#             raise HTTPException(status_code=400, detail="Invalid conversation_id format.")
+        
+#         convo = await mongo_db.conversations.find_one(
+#             {"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)}
+#         )
+#         if convo and convo.get("messages"):
+#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+#             chat_history_str = "\n".join(messages)
+
+#     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
+#     # The output of ainvoke is a dictionary containing all keys from the chain.
+#     response_dict = await query_rewriter_chain.ainvoke({
+#         "chat_history": chat_history_str,
+#         "question": request.prompt
+#     })
+#     # We need to extract the actual text output from the 'text' key.
+#     rewritten_query = response_dict['text']
+#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
+
+#     # --- 2. RETRIEVAL & RE-RANKING STAGE ---
+#     vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+    
+#     base_retriever = vectorstore.as_retriever(
+#         search_type="similarity",
+#         search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id)}}
+#     )
+    
+#     reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+    
+#     compression_retriever = ContextualCompressionRetriever(
+#         base_compressor=reranker, 
+#         base_retriever=base_retriever
+#     )
+
+#     final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+#     print(f"Retrieved and re-ranked to {len(final_context_docs)} final documents.")
+
+#     # --- 3. GENERATION STAGE ---
+#     response_text = ""
+#     if final_context_docs:
+#         print("📚 Found relevant documents. Generating answer with RAG.")
+#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+#         rag_chain = rag_prompt_template | llm | output_parser
+#         response_text = await rag_chain.ainvoke({
+#             "context": context_str,
+#             "question": rewritten_query
+#         })
+#     else:
+#         print("📚 No relevant documents found. Generating answer from general knowledge.")
+#         response_text = await llm.ainvoke(rewritten_query)
+
+#     # --- 4. SAVE TO MONGODB & RETURN RESPONSE ---
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [
+#         {"role": "user", "message": request.prompt},
+#         {"role": "ai", "message": response_text}
+#     ]
+    
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {
+#             "$push": {"messages": {"$each": new_messages}},
+#             "$setOnInsert": {
+#                 "user_id": str(current_user.id),
+#                 "created_at": datetime.datetime.now(datetime.timezone.utc)
+#             }
+#         },
+#         upsert=True
+#     )
+        
+#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj))
+# import datetime
+# from fastapi import APIRouter, Depends, HTTPException
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # --- LangChain Imports ---
+# from langchain_core.prompts import PromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain.chains import LLMChain
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+# from langchain.retrievers.document_compressors import CrossEncoderReranker
+# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+
+# # --- Local Imports ---
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# # --- Environment Setup & Constants ---
+# router = APIRouter()
+# OLLAMA_BASE_URL = "http://ollama:11434"
+
+# # --- Prompt Templates ---
+# REWRITE_PROMPT_TEMPLATE = """
+# Based on the chat history below, formulate a standalone question that can be understood
+# without the chat history. Do NOT answer the question, just reformulate it if needed,
+# otherwise return it as is.
+
+# Chat History:
+# {chat_history}
+
+# Latest User Question:
+# {question}
+
+# Standalone Question:
+# """
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+
+# RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# rag_prompt_template = PromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+
+# # --- Initialize Core Components ---
+# print("Initializing LLM, embeddings, and re-ranker models...")
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# output_parser = StrOutputParser()
+
+# # --- THIS IS THE CORRECTED LINE ---
+# # Initialize the local Cross-Encoder model with the full, namespaced identifier.
+# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# print("Models initialized successfully.")
+
+
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
+#     print(f"Original question: '{request.prompt}'")
+#     # --- NEW: Get model from request ---
+#     model_name = request.selected_model
+#     print(f"Using model: '{model_name}'")
+
+#     llm = ChatOllama(model=model_name, temperature=0, base_url=OLLAMA_BASE_URL)
+
+#     # --- 1. QUERY REWRITING STAGE ---
+#     chat_history_str = ""
+#     if request.conversation_id:
+#         if not ObjectId.is_valid(request.conversation_id):
+#             raise HTTPException(status_code=400, detail="Invalid conversation_id format.")
+        
+#         convo = await mongo_db.conversations.find_one(
+#             {"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)}
+#         )
+#         if convo and convo.get("messages"):
+#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+#             chat_history_str = "\n".join(messages)
+
+#     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
+#     # The output of ainvoke is a dictionary containing all keys from the chain.
+#     response_dict = await query_rewriter_chain.ainvoke({
+#         "chat_history": chat_history_str,
+#         "question": request.prompt
+#     })
+#     # We need to extract the actual text output from the 'text' key.
+#     rewritten_query = response_dict['text']
+#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
+
+#     # --- 2. RETRIEVAL & RE-RANKING STAGE ---
+#     vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+    
+#     base_retriever = vectorstore.as_retriever(
+#         search_type="similarity",
+#         search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id)}}
+#     )
+    
+#     reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+    
+#     compression_retriever = ContextualCompressionRetriever(
+#         base_compressor=reranker, 
+#         base_retriever=base_retriever
+#     )
+
+#     final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+#     print(f"Retrieved and re-ranked to {len(final_context_docs)} final documents.")
+
+#     # --- 3. GENERATION STAGE ---
+#     response_text = ""
+#     if final_context_docs:
+#         print("📚 Found relevant documents. Generating answer with RAG.")
+#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+#         rag_chain = rag_prompt_template | llm | output_parser
+#         response_text = await rag_chain.ainvoke({
+#             "context": context_str,
+#             "question": rewritten_query
+#         })
+#     else:
+#         print("📚 No relevant documents found. Generating answer from general knowledge.")
+#         response_text = await llm.ainvoke(rewritten_query)
+
+#     # --- 4. SAVE TO MONGODB & RETURN RESPONSE ---
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [
+#         {"role": "user", "message": request.prompt},
+#         {"role": "ai", "message": response_text}
+#     ]
+    
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {
+#             "$push": {"messages": {"$each": new_messages}},
+#             "$setOnInsert": {
+#                 "user_id": str(current_user.id),
+#                 "created_at": datetime.datetime.now(datetime.timezone.utc)
+#             }
+#         },
+#         upsert=True
+#     )
+        
+#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj))
+# import datetime
+# from fastapi import APIRouter, Depends, HTTPException
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # --- LangChain Imports ---
+# from langchain_core.prompts import PromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain.chains import LLMChain
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+# from langchain.retrievers.document_compressors import CrossEncoderReranker
+# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+
+# # --- Local Imports ---
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# # --- Environment Setup & Constants ---
+# router = APIRouter()
+# OLLAMA_BASE_URL = "http://ollama:11434"
+
+# # --- Prompt Templates ---
+# # We still keep the default RAG prompt as a fallback
+# DEFAULT_RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+
+# # --- Initialize Core Components ---
+# print("Initializing LLM, embeddings, and re-ranker models...")
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# output_parser = StrOutputParser()
+
+# # --- THIS IS THE CORRECTED LINE ---
+# # Initialize the local Cross-Encoder model with the full, namespaced identifier.
+# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# print("Models initialized successfully.")
+
+
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
+#     print(f"Original question: '{request.prompt}'")
+#     # --- NEW: Get model from request ---
+#     model_name = request.selected_model
+#     print(f"Using model: '{model_name}'")
+
+#     llm = ChatOllama(model=model_name, temperature=0, base_url=OLLAMA_BASE_URL)
+
+#     # --- 1. QUERY REWRITING STAGE ---
+#     chat_history_str = ""
+#     if request.conversation_id:
+#         if not ObjectId.is_valid(request.conversation_id):
+#             raise HTTPException(status_code=400, detail="Invalid conversation_id format.")
+        
+#         convo = await mongo_db.conversations.find_one(
+#             {"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)}
+#         )
+#         if convo and convo.get("messages"):
+#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+#             chat_history_str = "\n".join(messages)
+
+#     final_rag_prompt = default_rag_prompt
+#     if request.custom_prompt_template:
+#         print("✅ Using custom prompt template provided by user.")
+#         try:
+#             final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
+#         except Exception as e:
+#             print(f"⚠️ Warning: Invalid custom prompt template. Falling back to default. Error: {e}")
+
+#     query_rewriter_chain = LLMChain(llm=llm, prompt=final_rag_prompt, output_parser=StrOutputParser())
+#     # The output of ainvoke is a dictionary containing all keys from the chain.
+#     response_dict = await query_rewriter_chain.ainvoke({
+#         "chat_history": chat_history_str,
+#         "question": request.prompt
+#     })
+#     # We need to extract the actual text output from the 'text' key.
+#     rewritten_query = response_dict['text']
+#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
+
+#     # --- 2. RETRIEVAL & RE-RANKING STAGE ---
+#     vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+    
+#     base_retriever = vectorstore.as_retriever(
+#         search_type="similarity",
+#         search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id)}}
+#     )
+    
+#     reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+    
+#     compression_retriever = ContextualCompressionRetriever(
+#         base_compressor=reranker, 
+#         base_retriever=base_retriever
+#     )
+
+#     final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+#     print(f"Retrieved and re-ranked to {len(final_context_docs)} final documents.")
+
+#     # --- 3. GENERATION STAGE ---
+#     response_text = ""
+#     if final_context_docs:
+#         print("📚 Found relevant documents. Generating answer with RAG.")
+#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+#         # Use the final_rag_prompt variable here
+#         rag_chain = final_rag_prompt | llm | output_parser
+#         response_text = await rag_chain.ainvoke({"context": context_str, "question": rewritten_query})
+#     else:
+#         print("📚 No relevant documents found. Generating answer from general knowledge.")
+#         response_text = await llm.ainvoke(rewritten_query)
+
+#     # --- 4. SAVE TO MONGODB & RETURN RESPONSE ---
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [
+#         {"role": "user", "message": request.prompt},
+#         {"role": "ai", "message": response_text}
+#     ]
+    
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {
+#             "$push": {"messages": {"$each": new_messages}},
+#             "$setOnInsert": {
+#                 "user_id": str(current_user.id),
+#                 "created_at": datetime.datetime.now(datetime.timezone.utc)
+#             }
+#         },
+#         upsert=True
+#     )
+        
+#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj))
+# import datetime
+# import os
+# from fastapi import APIRouter, Depends, HTTPException
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # --- LangChain Imports ---
+# from langchain_core.prompts import PromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain.chains import LLMChain
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+# from langchain.retrievers.document_compressors import CrossEncoderReranker
+# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+
+# # --- Local Imports ---
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# # --- Environment Setup & Constants ---
+# router = APIRouter()
+# OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+
+# # --- Prompt Templates ---
+
+# # This prompt is ONLY for rewriting the user's query and is always the same.
+# REWRITE_PROMPT_TEMPLATE = """
+# Based on the chat history below, formulate a standalone question that can be understood
+# without the chat history. Do NOT answer the question, just reformulate it if needed,
+# otherwise return it as is.
+
+# Chat History:
+# {chat_history}
+
+# Latest User Question:
+# {question}
+
+# Standalone Question:
+# """
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+
+# # This is the default prompt for the main RAG task.
+# DEFAULT_RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+
+# # --- Initialize Models That Don't Change Per Request ---
+# print("Initializing static models (embeddings, re-ranker)...")
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# output_parser = StrOutputParser()
+# print("Static models initialized successfully.")
+
+
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
+#     print(f"Original question: '{request.prompt}'")
+#     model_name = request.selected_model
+#     print(f"Using model: '{model_name}'")
+
+#     # Dynamically instantiate the LLM for this specific request
+#     llm = ChatOllama(model=model_name, temperature=0, base_url=OLLAMA_BASE_URL)
+
+#     # --- 1. QUERY REWRITING STAGE ---
+#     chat_history_str = ""
+#     if request.conversation_id:
+#         convo = await mongo_db.conversations.find_one({"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)})
+#         if convo and convo.get("messages"):
+#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+#             chat_history_str = "\n".join(messages)
+            
+#     # --- THIS IS THE FIX ---
+#     # The rewriter chain should ALWAYS use the simple rewrite_prompt.
+#     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
+#     response_dict = await query_rewriter_chain.ainvoke({
+#         "chat_history": chat_history_str,
+#         "question": request.prompt
+#     })
+#     rewritten_query = response_dict['text']
+#     # --- END FIX ---
+#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
+
+#     # --- 2. RETRIEVAL & RE-RANKING STAGE ---
+#     # Determine which prompt to use for the main generation step
+#     final_rag_prompt = default_rag_prompt
+#     if request.custom_prompt_template:
+#         print("✅ Using custom prompt template provided by user.")
+#         try:
+#             final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
+#         except Exception as e:
+#             print(f"⚠️ Warning: Invalid custom prompt template. Falling back to default. Error: {e}")
+    
+#     # (Retrieval logic is unchanged)
+#     vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+#     base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id)}})
+#     reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+#     compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
+#     final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+#     print(f"Retrieved and re-ranked to {len(final_context_docs)} final documents.")
+
+#     # --- 3. GENERATION STAGE ---
+#     response_text = ""
+#     if final_context_docs:
+#         print("📚 Found relevant documents. Generating answer with RAG.")
+#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+#         # The main RAG chain is now correctly built with the final_rag_prompt.
+#         rag_chain = final_rag_prompt | llm | output_parser
+#         response_text = await rag_chain.ainvoke({"context": context_str, "question": rewritten_query})
+#     else:
+#         print("📚 No relevant documents found. Generating answer from general knowledge.")
+#         response_text = await llm.ainvoke(rewritten_query)
+
+#     # --- 4. SAVE TO MONGODB & RETURN RESPONSE (Unchanged) ---
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
+#         upsert=True
+#     )
+#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj))
 import datetime
-import asyncio
-from fastapi import APIRouter, Depends
+import os
+from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
-# LangChain Imports
+# --- LangChain Imports ---
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain.chains import LLMChain
 from langchain_community.vectorstores.pgvector import PGVector
 from langchain_ollama import ChatOllama, OllamaEmbeddings
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
 
-# Local Imports
+# --- Local Imports ---
 from backend.db.session import SYNC_DATABASE_URL
-from backend.schemas.chat_schema import ChatRequest, ChatResponse
+from backend.schemas.chat_schema import ChatRequest, ChatResponse, TokenCounts 
 from backend.api.auth_utils import get_current_user
 from backend.models.user import User
 from backend.db.mongodb import get_mongo_db
 
+# --- Environment Setup & Constants ---
 router = APIRouter()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
-# --- RAG Setup ---
-OLLAMA_BASE_URL = "http://ollama:11434"
-RAG_PROMPT_TEMPLATE = """
+# --- Prompt Templates ---
+
+# This prompt is ONLY for rewriting the user's query and is always the same.
+REWRITE_PROMPT_TEMPLATE = """
+Based on the chat history below, formulate a standalone question that can be understood
+without the chat history. Do NOT answer the question, just reformulate it if needed,
+otherwise return it as is.
+
+Chat History:
+{chat_history}
+
+Latest User Question:
+{question}
+
+Standalone Question:
+"""
+rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+
+# This is the default prompt for the main RAG task.
+DEFAULT_RAG_PROMPT_TEMPLATE = """
 You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
 If the answer is not in the context, just say you don't have enough information from the documents.
 
@@ -902,24 +1795,15 @@ QUESTION:
 
 ANSWER:
 """
-rag_prompt_template = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
 
-# 2. A general prompt for when we DON'T have context
-GENERAL_PROMPT_TEMPLATE = """
-You are a helpful AI assistant. Answer the user's question based on your own knowledge.
-
-QUESTION:
-{question}
-
-ANSWER:
-"""
-general_prompt_template = ChatPromptTemplate.from_template(GENERAL_PROMPT_TEMPLATE)
-
-# Initialize major components
-llm = ChatOllama(model="llama3:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+# --- Initialize Models That Don't Change Per Request ---
+print("Initializing static models (embeddings, re-ranker)...")
 embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
-# prompt_template = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
+cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
 output_parser = StrOutputParser()
+print("Static models initialized successfully.")
+
 
 @router.post("/chat", response_model=ChatResponse)
 async def handle_chat_request(
@@ -927,55 +1811,94 @@ async def handle_chat_request(
     current_user: User = Depends(get_current_user),
     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
 ):
-    print(f"Handling chat request for user: {current_user.email}")
+    print(f"\n--- New Chat Request for user: {current_user.email} ---")
+    print(f"Original question: '{request.prompt}'")
+    model_name = request.selected_model
+    print(f"Using model: '{model_name}'")
 
-    vectorstore = PGVector(
-        connection_string=SYNC_DATABASE_URL,
-        embedding_function=embeddings,
+    # Dynamically instantiate the LLM for this specific request
+    llm = ChatOllama(
+        model=request.selected_model,
+        temperature=request.temperature,
+        top_p=request.top_p,
+        num_predict=request.max_tokens, # Ollama uses num_predict for max tokens
+        base_url=OLLAMA_BASE_URL
     )
 
-    # --- THE FIX: Use a Stricter Retriever ---
-    # We now use a different search type.
-    retriever = vectorstore.as_retriever(
-        search_type="similarity_score_threshold",
-        search_kwargs={
-            "k": 3, # Still get up to 3 documents...
-            "score_threshold": 0.5, # ...but ONLY if their similarity score is above this value.
-            "filter": {"user_id": str(current_user.id)}
-        }
-    )
+    # --- 1. QUERY REWRITING STAGE ---
+    chat_history_str = ""
+    if request.conversation_id:
+        convo = await mongo_db.conversations.find_one({"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)})
+        if convo and convo.get("messages"):
+            messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+            chat_history_str = "\n".join(messages)
+            
+    # --- THIS IS THE FIX ---
+    # The rewriter chain should ALWAYS use the simple rewrite_prompt.
+    query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
+    response_dict = await query_rewriter_chain.ainvoke({
+        "chat_history": chat_history_str,
+        "question": request.prompt
+    })
+    rewritten_query = response_dict['text']
+    # --- END FIX ---
+    print(f"Rewritten query for retrieval: '{rewritten_query}'")
 
-    # Step 1: Retrieve documents FIRST
-    # The retriever will now return an empty list for "2+2" because no chunks meet the threshold.
-    retrieved_docs = retriever.invoke(request.prompt)
+    # --- 2. RETRIEVAL & RE-RANKING STAGE ---
+    # Determine which prompt to use for the main generation step
+    final_rag_prompt = default_rag_prompt
+    if request.custom_prompt_template:
+        print("✅ Using custom prompt template provided by user.")
+        try:
+            final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
+        except Exception as e:
+            print(f"⚠️ Warning: Invalid custom prompt template. Falling back to default. Error: {e}")
     
-    # Step 2: Check if any documents were found and format the context
-    if retrieved_docs:
-        print(f"📚 Found {len(retrieved_docs)} relevant document(s) above threshold. Using RAG prompt.")
-        context = "\n\n---\n\n".join([doc.page_content for doc in retrieved_docs])
-        prompt = rag_prompt_template.format(context=context, question=request.prompt)
+    # (Retrieval logic is unchanged)
+    vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+    base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id)}})
+    reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+    compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
+    final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+    print(f"Retrieved and re-ranked to {len(final_context_docs)} final documents.")
+
+    # --- 3. GENERATION STAGE ---
+    response_text = ""
+    response_metadata = {} 
+    if final_context_docs:
+        print("📚 Found relevant documents. Generating answer with RAG.")
+        context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+        # The main RAG chain is now correctly built with the final_rag_prompt.
+        llm_response = await (final_rag_prompt | llm).ainvoke({
+            "context": context_str,
+            "question": rewritten_query
+        })
+        response_text = llm_response.content
+        response_metadata = llm_response.response_metadata
     else:
-        print("📚 No relevant documents found above threshold. Using general knowledge prompt.")
-        prompt = general_prompt_template.format(question=request.prompt)
-        
-    # Step 3: Invoke the LLM with the correct prompt
-    generation_chain = (llm | output_parser)
-    
-    print(f"Invoking LLM with final prompt...")
-    response_text = generation_chain.invoke(prompt)
+        print("📚 No relevant documents found. Generating answer from general knowledge.")
+        llm_response = await llm.ainvoke(rewritten_query)
+        response_text = llm_response.content
+        response_metadata = llm_response.response_metadata
 
-    # --- MongoDB Saving Logic ---
-    # This logic can be simplified now that every query is a new RAG conversation.
-    new_convo_doc = {
-        "user_id": str(current_user.id), 
-        "messages": [
-            {"role": "user", "message": request.prompt},
-            {"role": "ai", "message": response_text}
-        ],
-        "created_at": datetime.datetime.now(datetime.timezone.utc)
-    }
-    result = await mongo_db.conversations.insert_one(new_convo_doc)
-    conversation_id_str = str(result.inserted_id)
-        
-    print(f"Successfully created new RAG conversation. ID: {conversation_id_str}")
-    return ChatResponse(response=response_text, conversation_id=conversation_id_str)
+    # --- 4. PARSE TOKEN COUNTS & SAVE TO MONGODB ---
+    prompt_tokens = response_metadata.get("prompt_eval_count", 0)
+    response_tokens = response_metadata.get("eval_count", 0)
+    token_counts = TokenCounts(
+        prompt_tokens=prompt_tokens,
+        response_tokens=response_tokens,
+        total_tokens=prompt_tokens + response_tokens
+    )
+    print(f"Token Counts: {token_counts.model_dump_json()}")
+
+    # --- 5. SAVE TO MONGODB & RETURN RESPONSE (Unchanged) ---
+    convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+    new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
+    await mongo_db.conversations.update_one(
+        {"_id": convo_id_obj, "user_id": str(current_user.id)},
+        {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
+        upsert=True
+    )
+
+    print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+    return ChatResponse(response=response_text, conversation_id=str(convo_id_obj),  token_counts=token_counts)

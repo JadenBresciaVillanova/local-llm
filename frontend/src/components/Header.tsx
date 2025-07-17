@@ -21,9 +21,9 @@ export default function Header() {
   return (
     <header className="bg-white shadow-sm sticky top-0 z-40">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:p-8">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between h-6">
           <div className="flex-shrink-0">
-            {/* ... Link to home ... */}
+              <Link href="/" className="text-xl font-bold text-gray-800">LocalAI</Link>
           </div>
           <div className="flex items-center space-x-4">
             {session && (
@@ -32,6 +32,7 @@ export default function Header() {
                         <Link href="/chats" className={navLinkClasses('/chats')}>Past Chats</Link>
                         <Link href="/" className={navLinkClasses('/')}>Chat</Link>
                         <Link href="/docs" className={navLinkClasses('/docs')}>Docs</Link>
+                        <Link href="/models" className={navLinkClasses('/models')}>Models</Link>
                     </nav>
                     <div className="flex items-center space-x-2">
                         <span className="text-sm text-gray-500">{session.user?.email}</span>

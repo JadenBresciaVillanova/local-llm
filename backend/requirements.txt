@@ -207,9 +207,11 @@ python-docx==1.2.0
 langchain==0.3.26
 langchain-core==0.3.68
 langchain-community==0.3.27
+langchain-experimental==0.3.4
 unstructured==0.18.2
 langchain-ollama==0.3.3
 psycopg-binary==3.2.9
 psycopg2-binary==2.9.10
 asyncio==3.4.3
+sentence-transformers==5.0.0
 

@@ -422,11 +422,9 @@ import ParameterSliders from './ParameterSliders'; // Import the new component
 
 const AVAILABLE_MODELS = [
     { value: "agent-mode", label: "AI Routes to Ideal Model" }, // The new Agent Mode
-    { value: "llama3:8b", label: "llama3:8b" },
+    { value: "llama3.1:8b", label: "llama3.1:8b" },
     { value: "codellama:7b", label: "codellama:7b" },
-    { value: "mistral", label: "mistral" },
-    { value: "dolphin-mistral", label: "dolphin-mistral" },
-    { value: "llava", label: "llava" },
+    { value: "dolphin-mistral:7b", label: "dolphin-mistral:7b" },
     { value: "gemma:7b", label: "gemma:7b" }
 ];
 interface FileMetadata { id: string; file_name: string; file_type: string; }

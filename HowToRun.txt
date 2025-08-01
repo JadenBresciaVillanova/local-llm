@@ -35,3 +35,5 @@ add option to poll all components of docker container to show operational statis
 
 While ai is loading more status messages (time it takes to load, maybe what stage it is at in the routing)
 fix bug where if u go to past chats mid ai generation it deletes
+fix issue where all models can basically code, and write u dont want to pin a model to just writing or coding...
+how can you dynamically choose the correct model to do some of those things

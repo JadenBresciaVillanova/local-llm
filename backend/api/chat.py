@@ -2116,8 +2116,470 @@
 
 #     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
 #     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj),  token_counts=token_counts)
+# import datetime
+# import os
+# from fastapi import APIRouter, Depends, HTTPException
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # LangChain Imports
+# from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain.chains import LLMChain
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+# from langchain.retrievers.document_compressors import CrossEncoderReranker
+# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+
+# # Local Imports
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse, TokenCounts
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# router = APIRouter()
+# OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+
+# # --- PROMPT TEMPLATES ---
+# TOOL_SELECTION_PROMPT_TEMPLATE = """
+# You are a highly intelligent routing agent. Your job is to analyze the user's query and decide which specialized AI model is best suited to handle the request.
+# You must choose from the following available models:
+
+# - 'gemma:7b': Best for very small tasks in writing, explaining, and coding.
+# - 'codellama:7b': Best for writing, explaining, or debugging code in any language.
+# - 'llama3:8b': Best for general medium-sized conversation, summarization, reasoning, and answering questions based on provided text (RAG).
+
+# Based on the user's query, you must respond with ONLY the name of the chosen model and nothing else. For example, if the query is a coding question, your entire response should be just "codellama:7b".
+
+# User Query:
+# {question}
+
+# Chosen Model:
+# """
+# tool_selection_prompt = PromptTemplate.from_template(TOOL_SELECTION_PROMPT_TEMPLATE)
+
+# REWRITE_PROMPT_TEMPLATE = """
+# Based on the chat history below, formulate a standalone question that can be understood
+# without the chat history. Do NOT answer the question, just reformulate it if needed,
+# otherwise return it as is.
+
+# Chat History:
+# {chat_history}
+
+# Latest User Question:
+# {question}
+
+# Standalone Question:
+# """
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+
+# # This is the default prompt for the main RAG task.
+# DEFAULT_RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+
+# CODE_PROMPT_TEMPLATE = """
+# You are an expert programmer and master of algorithms. Provide a clear, concise, and correct code solution to the user's request.
+# Explain the code briefly if necessary. Use the following context if it is relevant.
+
+# CONTEXT:
+# {context}
+
+# REQUEST:
+# {question}
+
+# CODE:
+# """
+# code_prompt = ChatPromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
+
+# tool_selection_prompt = PromptTemplate.from_template(TOOL_SELECTION_PROMPT_TEMPLATE)
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+# default_rag_prompt = ChatPromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+# code_prompt = ChatPromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
+# PROMPT_FOR_MODEL = { "codellama:7b": code_prompt, "dolphin-mistral:7b": code_prompt, "gemma:7b": code_prompt}
+
+# # --- STATIC MODELS ---
+# print("Initializing static models (embeddings, re-ranker)...")
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# output_parser = StrOutputParser()
+# print("Static models initialized successfully.")
+
+
+# # --- REUSABLE PIPELINE ---
+# async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient, model_name: str) -> ChatResponse:
+#     print(f"--- Running RAG Pipeline with model: '{model_name}' ---")
+    
+#     llm = ChatOllama(model=model_name, temperature=request.temperature, top_p=request.top_p, num_predict=request.max_tokens, base_url=OLLAMA_BASE_URL)
+
+#     # 1. Query Rewriting Stage
+#     chat_history_str = ""
+#     if request.conversation_id:
+#         convo = await mongo_db.conversations.find_one({"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)})
+#         if convo and convo.get("messages"):
+#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+#             chat_history_str = "\n".join(messages)
+    
+#     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
+#     response_dict = await query_rewriter_chain.ainvoke({"chat_history": chat_history_str, "question": request.prompt})
+#     rewritten_query = response_dict['text']
+#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
+
+#     # 2. Conditional Retrieval & Re-ranking Stage
+#     final_context_docs = []
+#     if request.selected_file_ids:
+#         print(f"✅ User has selected {len(request.selected_file_ids)} file(s). Attempting to retrieve context...")
+#         vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+#         base_retriever = vectorstore.as_retriever(
+#             search_type="similarity",
+#             search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id), "file_id": {"$in": [str(fid) for fid in request.selected_file_ids]}}}
+#         )
+#         reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+#         compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
+#         final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+#     else:
+#         print("✅ No files selected by user. Skipping context retrieval.")
+    
+#     # print(f"Retrieved {len(final_context_docs)} final documents for context.")
+
+#     # 3. Prompt Selection Stage
+#     final_rag_prompt = PROMPT_FOR_MODEL.get(model_name)
+#     if not final_rag_prompt:
+#         if request.custom_prompt_template:
+#             print("✅ Using custom prompt template from user.")
+#             try: final_rag_prompt = ChatPromptTemplate.from_template(request.custom_prompt_template)
+#             except Exception as e:
+#                 print(f"⚠️ Warning: Invalid custom prompt template. Using default. Error: {e}")
+#                 final_rag_prompt = default_rag_prompt
+#         else: final_rag_prompt = default_rag_prompt
+#     else: print(f"✅ Using specialized prompt for model '{model_name}'.")
+            
+#     # 4. Generation Stage
+#     llm_response = None
+#     if final_context_docs:
+#         print("📚 Found relevant documents. Generating answer with RAG.")
+#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+#         rag_chain = final_rag_prompt | llm
+#         llm_response = await rag_chain.ainvoke({"context": context_str, "question": rewritten_query})
+#     else:
+#         print("📚 No documents in context. Generating answer from general knowledge.")
+#         rag_chain = final_rag_prompt | llm
+#         llm_response = await rag_chain.ainvoke({"context": "", "question": rewritten_query})
+
+#     response_text = llm_response.content
+#     response_metadata = llm_response.response_metadata
+
+#     # 5. Parse Token Counts & Save to DB
+#     prompt_tokens = response_metadata.get("prompt_eval_count", 0)
+#     response_tokens = response_metadata.get("eval_count", 0)
+#     token_counts = TokenCounts(prompt_tokens=prompt_tokens, response_tokens=response_tokens, total_tokens=prompt_tokens + response_tokens)
+    
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
+#         upsert=True
+#     )
+    
+#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=token_counts)
+
+
+# # --- MAIN ROUTER ---
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
+#     print(f"Original question: '{request.prompt}'")
+    
+#     model_to_use = request.selected_model
+    
+#     if model_to_use == "agent-mode":
+#         print("🤖 Entering Agent Mode...")
+#         router_llm = ChatOllama(model="llama3:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+#         model_selection_chain = tool_selection_prompt | router_llm | StrOutputParser()
+#         chosen_model = await model_selection_chain.ainvoke({"question": request.prompt})
+#         model_to_use = chosen_model.strip().lower().split()[0]
+#         print(f"🤖 Agent has chosen model: '{model_to_use}'")
+
+#     return await run_rag_pipeline(request, current_user, mongo_db, model_name=model_to_use)
+
+# import datetime
+# import os
+# import json
+# from fastapi import APIRouter, Depends, HTTPException
+# from motor.motor_asyncio import AsyncIOMotorClient
+# from bson import ObjectId
+
+# # LangChain Imports
+# from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain.chains import LLMChain
+# from langchain_community.vectorstores.pgvector import PGVector
+# from langchain_ollama import ChatOllama, OllamaEmbeddings
+# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+# from langchain.retrievers.document_compressors import CrossEncoderReranker
+# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+
+# # Local Imports
+# from backend.db.session import SYNC_DATABASE_URL
+# from backend.schemas.chat_schema import ChatRequest, ChatResponse, TokenCounts
+# from backend.api.auth_utils import get_current_user
+# from backend.models.user import User
+# from backend.db.mongodb import get_mongo_db
+
+# # --- Environment Setup & Constants ---
+# router = APIRouter()
+# OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+
+# # --- 1. PROMPT TEMPLATES ---
+
+# # Prompt 1: The Triage Agent - Classifies query complexity
+# TRIAGE_PROMPT_TEMPLATE = """
+# You are a master AI dispatcher. Your first task is to analyze the user's query and classify it into one of two categories: "Simple" or "Complex".
+
+# - A "Simple" query is a single, self-contained request that can be answered by one model. Examples: "Write a function to do X", "What is Y?", "Summarize this text".
+# - A "Complex" query involves multiple distinct steps, requires combining different skills (e.g., coding AND summarization), or implies a sequence of actions. Examples: "Analyze this code for bugs AND write a report", "Compare document A and document B and then write a poem about the result".
+
+# You must respond with a JSON object containing two keys:
+# 1. "complexity": Your classification, either "Simple" or "Complex".
+# 2. "reasoning": A brief, one-sentence explanation for your choice.
+
+# User Query:
+# {question}
+
+# Triage Decision:
+# """
+# triage_prompt = PromptTemplate.from_template(TRIAGE_PROMPT_TEMPLATE)
+
+# # Prompt 2: The Performance-Aware Router - Selects the best model for SIMPLE tasks
+# PERFORMANCE_ROUTER_PROMPT_TEMPLATE = """
+# You are an efficiency-focused AI dispatcher. Your goal is to choose the model with the best balance of quality, speed, and resource cost for the user's simple task.
+
+# Model Performance Profile:
+# | Model                 | Quality (1-10) | Speed (1-10) | Resource Cost (1-10) | Strengths                               |
+# |-----------------------|----------------|--------------|----------------------|-----------------------------------------|
+# | `llama3.1:8b`         | 8              | 7            | 6                    | General, RAG, reliable                  |
+# | `codellama:7b`        | 9 (for code)   | 6            | 7                    | Complex Code, algorithms                |
+# | `gemma:7b"`           | 8              | 9            | 5                    | Fast, general, good at simple code      |
+# | `dolphin-mistral:7b`  | 8              | 8            | 6                    | Creative, less filtered code & text     |
+
+# Based on the User Query, you must respond with ONLY the name of the chosen model from the table and nothing else.
+
+# User Query:
+# {question}
+
+# Chosen Model:
+# """
+# performance_router_prompt = PromptTemplate.from_template(PERFORMANCE_ROUTER_PROMPT_TEMPLATE)
+
+# # Prompt 3 & 4: For query rewriting and final RAG generation (unchanged)
+# REWRITE_PROMPT_TEMPLATE = """
+# Based on the chat history below, formulate a standalone question that can be understood
+# without the chat history. Do NOT answer the question, just reformulate it if needed,
+# otherwise return it as is.
+
+# Chat History:
+# {chat_history}
+
+# Latest User Question:
+# {question}
+
+# Standalone Question:
+# """
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+
+# # This is the default prompt for the main RAG task.
+# DEFAULT_RAG_PROMPT_TEMPLATE = """
+# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
+# If the answer is not in the context, just say you don't have enough information from the documents.
+
+# CONTEXT:
+# {context}
+
+# QUESTION:
+# {question}
+
+# ANSWER:
+# """
+# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+
+# CODE_PROMPT_TEMPLATE = """
+# You are an expert programmer and master of algorithms. Provide a clear, concise, and correct code solution to the user's request.
+# Explain the code briefly if necessary. Use the following context if it is relevant.
+
+# CONTEXT:
+# {context}
+
+# REQUEST:
+# {question}
+
+# CODE:
+# """
+# code_prompt = PromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
+
+# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
+# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+# code_prompt = PromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
+# PROMPT_FOR_MODEL = { "codellama:7b": code_prompt, "codellama:7b": code_prompt, "dolphin-mistral": code_prompt }
+
+# # --- Initialize Static Models ---
+# print("Initializing static models (embeddings, re-ranker)...")
+# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# output_parser = StrOutputParser()
+# print("Static models initialized successfully.")
+
+
+# # --- WORKFLOW B: MULTI-AGENT SYSTEM (PLACEHOLDER) ---
+# async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
+#     print("🚀 Query is complex. Engaging Multi-Agent System (Placeholder)...")
+#     # In a real implementation, this would trigger a complex chain or graph of agents.
+#     # For now, we return a message indicating this path was chosen.
+#     response_text = "Multi-Agent System: I have determined this is a complex query that requires multiple steps.\n\n(In the future, I would now break this down and use specialized agents to solve it)."
+    
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
+#         upsert=True
+#     )
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj))
+
+
+# # --- WORKFLOW A: PERFORMANCE-AWARE ROUTER ---
+# async def run_performance_aware_router(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
+#     print("✅ Query is simple. Engaging Performance-Aware Router...")
+#     router_llm = ChatOllama(model="llama3.1:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+#     model_selection_chain = performance_router_prompt | router_llm | StrOutputParser()
+#     chosen_model = await model_selection_chain.ainvoke({"question": request.prompt})
+#     model_to_use = chosen_model.strip().lower().split()[0].replace('`', '')
+#     print(f"📈 Performance router has chosen model: '{model_to_use}'")
+#     # Delegate the actual work to the main RAG pipeline
+#     return await run_rag_pipeline(request, current_user, mongo_db, model_name=model_to_use)
+
+
+# # --- RAG PIPELINE (THE ENGINE) ---
+# async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient, model_name: str) -> ChatResponse:
+#     # This function is the same as the last version, no changes needed.
+#     print(f"--- Running RAG Pipeline with model: '{model_name}' ---")
+#     # ... (The full run_rag_pipeline logic from the previous step goes here)
+#     # It starts with `llm = ChatOllama(...)` and ends with `return ChatResponse(...)`
+#     # ... (Pasting it here for completeness)
+#     llm = ChatOllama(model=model_name, temperature=request.temperature, top_p=request.top_p, num_predict=request.max_tokens, base_url=OLLAMA_BASE_URL)
+#     chat_history_str = ""
+#     if request.conversation_id:
+#         convo = await mongo_db.conversations.find_one({"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)})
+#         if convo and convo.get("messages"):
+#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
+#             chat_history_str = "\n".join(messages)
+#     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
+#     response_dict = await query_rewriter_chain.ainvoke({"chat_history": chat_history_str, "question": request.prompt})
+#     rewritten_query = response_dict['text']
+#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
+#     final_context_docs = []
+#     if request.selected_file_ids:
+#         print(f"✅ User has selected {len(request.selected_file_ids)} file(s). Attempting to retrieve context...")
+#         vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
+#         base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id), "file_id": {"$in": [str(fid) for fid in request.selected_file_ids]}}})
+#         reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
+#         compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
+#         final_context_docs = await compression_retriever.ainvoke(rewritten_query)
+#     else:
+#         print("✅ No files selected by user. Skipping context retrieval.")
+#     print(f"Retrieved {len(final_context_docs)} final documents for context.")
+#     final_rag_prompt = PROMPT_FOR_MODEL.get(model_name)
+#     if not final_rag_prompt:
+#         if request.custom_prompt_template:
+#             print("✅ Using custom prompt template from user.")
+#             try: final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
+#             except Exception as e:
+#                 print(f"⚠️ Warning: Invalid custom prompt template. Using default. Error: {e}")
+#                 final_rag_prompt = default_rag_prompt
+#         else: final_rag_prompt = default_rag_prompt
+#     else: print(f"✅ Using specialized prompt for model '{model_name}'.")
+#     llm_response = None
+#     if final_context_docs:
+#         print("📚 Found relevant documents. Generating answer with RAG.")
+#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
+#         rag_chain = final_rag_prompt | llm
+#         llm_response = await rag_chain.ainvoke({"context": context_str, "question": rewritten_query})
+#     else:
+#         print("📚 No documents in context. Generating answer from general knowledge.")
+#         rag_chain = final_rag_prompt | llm
+#         llm_response = await rag_chain.ainvoke({"context": "", "question": rewritten_query})
+#     response_text = llm_response.content
+#     response_metadata = llm_response.response_metadata
+#     prompt_tokens = response_metadata.get("prompt_eval_count", 0)
+#     response_tokens = response_metadata.get("eval_count", 0)
+#     token_counts = TokenCounts(prompt_tokens=prompt_tokens, response_tokens=response_tokens, total_tokens=prompt_tokens + response_tokens)
+#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+#     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
+#     await mongo_db.conversations.update_one(
+#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
+#         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
+#         upsert=True
+#     )
+#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
+#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=token_counts)
+
+
+# # --- MAIN CHAT HANDLER (THE TRIAGE ROUTER) ---
+# @router.post("/chat", response_model=ChatResponse)
+# async def handle_chat_request(
+#     request: ChatRequest,
+#     current_user: User = Depends(get_current_user),
+#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
+# ):
+#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
+#     print(f"Original question: '{request.prompt}'")
+    
+#     # If user selected a specific model, run the pipeline directly.
+#     if request.selected_model != "agent-mode":
+#         print(f"✅ User selected specific model: '{request.selected_model}'. Bypassing agent.")
+#         return await run_rag_pipeline(request, current_user, mongo_db, model_name=request.selected_model)
+
+#     # --- AGENT MODE: TRIAGE ---
+#     print("🤖 Entering Agent Mode: Triage...")
+#     triage_llm = ChatOllama(model="llama3.1:8b", temperature=0, format="json", base_url=OLLAMA_BASE_URL)
+#     triage_chain = triage_prompt | triage_llm | StrOutputParser()
+    
+#     triage_response_str = await triage_chain.ainvoke({"question": request.prompt})
+    
+#     complexity = "Simple" # Default to simple if JSON parsing fails
+#     try:
+#         triage_json = json.loads(triage_response_str)
+#         complexity = triage_json.get("complexity", "Simple")
+#         print(f"🤖 Triage decision: '{complexity}'. Reason: {triage_json.get('reasoning')}")
+#     except json.JSONDecodeError:
+#         print(f"⚠️ Warning: Triage agent did not return valid JSON. Defaulting to Simple workflow. Response was: {triage_response_str}")
+
+#     # Route to the appropriate workflow
+#     if complexity == "Complex":
+#         return await run_multi_agent_workflow(request, current_user, mongo_db)
+#     else: # Simple
+#         return await run_performance_aware_router(request, current_user, mongo_db)
 import datetime
 import os
+import json
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -2138,27 +2600,54 @@ from backend.schemas.chat_schema import ChatRequest, ChatResponse, TokenCounts
 from backend.api.auth_utils import get_current_user
 from backend.models.user import User
 from backend.db.mongodb import get_mongo_db
+from backend.services.sandbox_service import SandboxService
 
+# --- Environment Setup & Constants ---
 router = APIRouter()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
-# --- PROMPT TEMPLATES ---
-TOOL_SELECTION_PROMPT_TEMPLATE = """
-You are a highly intelligent routing agent. Your job is to analyze the user's query and decide which specialized AI model is best suited to handle the request.
-You must choose from the following available models:
+# --- 1. PROMPT TEMPLATES ---
 
-- 'codellama:7b': Best for writing, explaining, or debugging code in any language.
-- 'llama3:8b': Best for general conversation, summarization, reasoning, and answering questions based on provided text (RAG).
+# Prompt 1: The Triage Agent - Classifies query complexity
+TRIAGE_PROMPT_TEMPLATE = """
+You are a master AI dispatcher. Your first task is to analyze the user's query and classify it into one of two categories: "Simple" or "Complex".
 
-Based on the user's query, you must respond with ONLY the name of the chosen model and nothing else. For example, if the query is a coding question, your entire response should be just "codellama:7b".
+- A "Simple" query is a single, self-contained request that can be answered by one model. Examples: "Write a function to do X", "What is Y?", "Summarize this text".
+- A "Complex" query involves multiple distinct steps, requires combining different skills (e.g., coding AND summarization), or implies a sequence of actions. Examples: "Analyze this code for bugs AND write a report", "Compare document A and document B and then write a poem about the result".
+
+You must respond with a JSON object containing two keys:
+1. "complexity": Your classification, either "Simple" or "Complex".
+2. "reasoning": A brief, one-sentence explanation for your choice.
+
+User Query:
+{question}
+
+Triage Decision:
+"""
+triage_prompt = PromptTemplate.from_template(TRIAGE_PROMPT_TEMPLATE)
+
+# Prompt 2: The Performance-Aware Router - Selects the best model for SIMPLE tasks
+PERFORMANCE_ROUTER_PROMPT_TEMPLATE = """
+You are an efficiency-focused AI dispatcher. Your goal is to choose the model with the best balance of quality, speed, and resource cost for the user's simple task.
+
+Model Performance Profile:
+| Model                 | Quality (1-10) | Speed (1-10) | Resource Cost (1-10) | Strengths                               |
+|-----------------------|----------------|--------------|----------------------|-----------------------------------------|
+| `llama3.1:8b`         | 8              | 7            | 6                    | General, RAG, reliable                  |
+| `codellama:7b`        | 9 (for code)   | 6            | 7                    | Complex Code, algorithms                |
+| `gemma:7b"`           | 8              | 9            | 5                    | Fast, general, good at simple code      |
+| `dolphin-mistral:7b`  | 8              | 8            | 6                    | Creative, less filtered code & text     |
+
+Based on the User Query, you must respond with ONLY the name of the chosen model from the table and nothing else.
 
 User Query:
 {question}
 
 Chosen Model:
 """
-tool_selection_prompt = PromptTemplate.from_template(TOOL_SELECTION_PROMPT_TEMPLATE)
+performance_router_prompt = PromptTemplate.from_template(PERFORMANCE_ROUTER_PROMPT_TEMPLATE)
 
+# Prompt 3 & 4: For query rewriting and final RAG generation (unchanged)
 REWRITE_PROMPT_TEMPLATE = """
 Based on the chat history below, formulate a standalone question that can be understood
 without the chat history. Do NOT answer the question, just reformulate it if needed,
@@ -2201,15 +2690,43 @@ REQUEST:
 
 CODE:
 """
-code_prompt = ChatPromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
+code_prompt = PromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
 
-tool_selection_prompt = PromptTemplate.from_template(TOOL_SELECTION_PROMPT_TEMPLATE)
+#had to add no repeats to fix stuck in a loop problem
+#Had to add turn-by-turn
+# --- THIS IS THE REVISED PROMPT V2 ---
+TOOL_USER_PROMPT_TEMPLATE = """
+You are a methodical, step-by-step programming assistant. You have access to a secure `code_interpreter`.
+
+**CRITICAL INSTRUCTIONS:**
+1.  Your **FIRST** step is to analyze the User Request and Conversation History. Do you have ALL the information you need?
+2.  **IF YOU DO NOT HAVE THE INFORMATION**: You MUST ask the user a clarifying question to get the missing information. Your response must be only the question. Do not use tools. Do not write a plan.
+3.  **IF, AND ONLY IF, YOU HAVE ALL THE INFORMATION**: Then, and only then, you may proceed. Create a plan and use the `code_interpreter` tool to execute it.
+
+**Capabilities & Limitations:**
+- You **can** write and execute Python code in the `code_interpreter`.
+- You **cannot** access files, attachments, or websites. Do not invent information for missing files.
+
+---
+**Conversation History:**
+{history}
+
+**User Request:**
+{question}
+
+**Your Response (MUST be either a question for the user, or a tool-use JSON if you have all information):**
+"""
+
+tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
+
+tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
+
 rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
-default_rag_prompt = ChatPromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
-code_prompt = ChatPromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
-PROMPT_FOR_MODEL = { "codellama:7b": code_prompt, "dolphin-mistral": code_prompt }
+default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
+code_prompt = PromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
+PROMPT_FOR_MODEL = { "codellama:7b": code_prompt, "gemma:7b": code_prompt, "dolphin-mistral:7b": code_prompt }
 
-# --- STATIC MODELS ---
+# --- Initialize Static Models ---
 print("Initializing static models (embeddings, re-ranker)...")
 embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
 cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -2217,55 +2734,159 @@ output_parser = StrOutputParser()
 print("Static models initialized successfully.")
 
 
-# --- REUSABLE PIPELINE ---
-async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient, model_name: str) -> ChatResponse:
-    print(f"--- Running RAG Pipeline with model: '{model_name}' ---")
-    
-    llm = ChatOllama(model=model_name, temperature=request.temperature, top_p=request.top_p, num_predict=request.max_tokens, base_url=OLLAMA_BASE_URL)
+# --- WORKFLOW B: MULTI-AGENT SYSTEM (PLACEHOLDER) ---
+async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
+    planner_llm = ChatOllama(model="codellama:7b", temperature=0, format="json", base_url=OLLAMA_BASE_URL)
+    planner_chain = tool_user_prompt | planner_llm | StrOutputParser()
 
-    # 1. Query Rewriting Stage
+    # History for the agent's internal monologue
+    agent_history: List[str] = []
+    response_text = ""
+
+    # Limit the agent to a max number of steps to prevent infinite loops
+    MAX_STEPS = 5
+    for i in range(MAX_STEPS):
+        print(f"\n--- Agent Step {i + 1} ---")
+        
+        history_str = "\n".join(agent_history)
+        
+        # --- START: ADD THIS DEBUGGING CODE ---
+        # 1. Log the exact prompt being sent to the planner
+        full_prompt = tool_user_prompt.format(question=request.prompt, history=history_str)
+        print("--- Full Prompt to Planner ---")
+        print(full_prompt)
+        print("------------------------------")
+        # --- END: ADD THIS DEBUGGING CODE ---
+
+        llm_decision_str = await planner_chain.ainvoke({"question": request.prompt, "history": history_str})
+        
+        # --- START: ADD THIS DEBUGGING CODE ---
+        # 2. Log the raw response from the planner
+        print("--- Raw LLM Decision ---")
+        print(llm_decision_str)
+        print("------------------------")
+        # --- END: ADD THIS DEBUGGING CODE ---
+
+        agent_history.append(llm_decision_str)
+        
+        try:
+            decision_json = json.loads(llm_decision_str)
+            
+            # 2. Check for a Final Answer
+            if "final_answer" in decision_json:
+                print("🤖 Agent decided to give a Final Answer.")
+                response_text = decision_json["final_answer"]
+                break # Exit the loop
+            
+            # 3. Check for a Tool Call
+            tool_to_use = decision_json.get("tool_to_use")
+            if tool_to_use:
+                if tool_to_use == "code_interpreter":
+                    language = decision_json.get("language")
+                    code = decision_json.get("code")
+                    print(f"🤖 Agent decided to use tool 'code_interpreter' with language '{language}'.")
+                    
+                    # 4. Execute the tool
+                    stdout, stderr, exit_code = SandboxService.execute_code(language, code)
+                    
+                    # 5. Create the Observation and add it to history
+                    observation = f"--- Observation (Exit Code: {exit_code}) ---\n"
+                    if stdout: observation += f"STDOUT:\n{stdout}\n"
+                    if stderr: observation += f"STDERR:\n{stderr}\n"
+                    if not stdout and not stderr: observation += "Code executed with no output.\n"
+                    observation += "---------------------------------"
+                    
+                    print(observation)
+                    agent_history.append(observation)
+                    
+                    # Continue to the next loop iteration
+                    continue
+                else:
+                    # --- THIS IS THE NEW PART ---
+                    # The AI requested a tool that doesn't exist. Give it feedback.
+                    print(f"⚠️ Agent requested an invalid tool: '{tool_to_use}'")
+                    observation = f"--- Observation ---\nError: The tool '{tool_to_use}' does not exist. The only available tool is 'code_interpreter'.\n---------------------------------"
+                    agent_history.append(observation)
+                    continue # Let the agent try again with this new information
+                    
+            # If it's valid JSON but not a recognized action, treat it as the answer
+            print("🤖 Agent provided a non-standard JSON response. Treating as a direct answer.")
+            response_text = llm_decision_str
+            break
+
+        except (json.JSONDecodeError, KeyError):
+            # If the LLM's response was not valid JSON, it's not following the ReAct framework.
+            # We assume it has provided a direct answer.
+            print("🤖 Planner did not request a tool or provide a final answer. Using its response directly.")
+            response_text = llm_decision_str
+            break # Exit the loop
+    else:
+        # This part runs if the `for` loop completes without a `break`
+        print("⚠️ Agent reached max steps. Returning last known state.")
+        response_text = "The agent reached its maximum number of steps without providing a final answer. Please try rephrasing your request."
+
+    # --- Save final result to MongoDB ---
+    convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
+    new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
+    await mongo_db.conversations.update_one(
+        {"_id": convo_id_obj, "user_id": str(current_user.id)},
+        {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
+        upsert=True
+    )
+    return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=None)
+
+
+# --- WORKFLOW A: PERFORMANCE-AWARE ROUTER ---
+async def run_performance_aware_router(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
+    print("✅ Query is simple. Engaging Performance-Aware Router...")
+    router_llm = ChatOllama(model="llama3.1:8b", temperature=0, base_url=OLLAMA_BASE_URL)
+    model_selection_chain = performance_router_prompt | router_llm | StrOutputParser()
+    chosen_model = await model_selection_chain.ainvoke({"question": request.prompt})
+    model_to_use = chosen_model.strip().lower().split()[0].replace('`', '')
+    print(f"📈 Performance router has chosen model: '{model_to_use}'")
+    # Delegate the actual work to the main RAG pipeline
+    return await run_rag_pipeline(request, current_user, mongo_db, model_name=model_to_use)
+
+
+# --- RAG PIPELINE (THE ENGINE) ---
+async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient, model_name: str) -> ChatResponse:
+    # This function is the same as the last version, no changes needed.
+    print(f"--- Running RAG Pipeline with model: '{model_name}' ---")
+    # ... (The full run_rag_pipeline logic from the previous step goes here)
+    # It starts with `llm = ChatOllama(...)` and ends with `return ChatResponse(...)`
+    # ... (Pasting it here for completeness)
+    llm = ChatOllama(model=model_name, temperature=request.temperature, top_p=request.top_p, num_predict=request.max_tokens, base_url=OLLAMA_BASE_URL)
     chat_history_str = ""
     if request.conversation_id:
         convo = await mongo_db.conversations.find_one({"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)})
         if convo and convo.get("messages"):
             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
             chat_history_str = "\n".join(messages)
-    
     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
     response_dict = await query_rewriter_chain.ainvoke({"chat_history": chat_history_str, "question": request.prompt})
     rewritten_query = response_dict['text']
     print(f"Rewritten query for retrieval: '{rewritten_query}'")
-
-    # 2. Conditional Retrieval & Re-ranking Stage
     final_context_docs = []
     if request.selected_file_ids:
         print(f"✅ User has selected {len(request.selected_file_ids)} file(s). Attempting to retrieve context...")
         vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
-        base_retriever = vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id), "file_id": {"$in": [str(fid) for fid in request.selected_file_ids]}}}
-        )
+        base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id), "file_id": {"$in": [str(fid) for fid in request.selected_file_ids]}}})
         reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
         compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
         final_context_docs = await compression_retriever.ainvoke(rewritten_query)
     else:
         print("✅ No files selected by user. Skipping context retrieval.")
-    
-    # print(f"Retrieved {len(final_context_docs)} final documents for context.")
-
-    # 3. Prompt Selection Stage
+    print(f"Retrieved {len(final_context_docs)} final documents for context.")
     final_rag_prompt = PROMPT_FOR_MODEL.get(model_name)
     if not final_rag_prompt:
         if request.custom_prompt_template:
             print("✅ Using custom prompt template from user.")
-            try: final_rag_prompt = ChatPromptTemplate.from_template(request.custom_prompt_template)
+            try: final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
             except Exception as e:
                 print(f"⚠️ Warning: Invalid custom prompt template. Using default. Error: {e}")
                 final_rag_prompt = default_rag_prompt
         else: final_rag_prompt = default_rag_prompt
     else: print(f"✅ Using specialized prompt for model '{model_name}'.")
-            
-    # 4. Generation Stage
     llm_response = None
     if final_context_docs:
         print("📚 Found relevant documents. Generating answer with RAG.")
@@ -2276,15 +2897,11 @@ async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: A
         print("📚 No documents in context. Generating answer from general knowledge.")
         rag_chain = final_rag_prompt | llm
         llm_response = await rag_chain.ainvoke({"context": "", "question": rewritten_query})
-
     response_text = llm_response.content
     response_metadata = llm_response.response_metadata
-
-    # 5. Parse Token Counts & Save to DB
     prompt_tokens = response_metadata.get("prompt_eval_count", 0)
     response_tokens = response_metadata.get("eval_count", 0)
     token_counts = TokenCounts(prompt_tokens=prompt_tokens, response_tokens=response_tokens, total_tokens=prompt_tokens + response_tokens)
-    
     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
     await mongo_db.conversations.update_one(
@@ -2292,12 +2909,11 @@ async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: A
         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
         upsert=True
     )
-    
     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=token_counts)
 
 
-# --- MAIN ROUTER ---
+# --- MAIN CHAT HANDLER (THE TRIAGE ROUTER) ---
 @router.post("/chat", response_model=ChatResponse)
 async def handle_chat_request(
     request: ChatRequest,
@@ -2307,14 +2923,28 @@ async def handle_chat_request(
     print(f"\n--- New Chat Request for user: {current_user.email} ---")
     print(f"Original question: '{request.prompt}'")
     
-    model_to_use = request.selected_model
-    
-    if model_to_use == "agent-mode":
-        print("🤖 Entering Agent Mode...")
-        router_llm = ChatOllama(model="llama3:8b", temperature=0, base_url=OLLAMA_BASE_URL)
-        model_selection_chain = tool_selection_prompt | router_llm | StrOutputParser()
-        chosen_model = await model_selection_chain.ainvoke({"question": request.prompt})
-        model_to_use = chosen_model.strip().lower().split()[0]
-        print(f"🤖 Agent has chosen model: '{model_to_use}'")
+    # If user selected a specific model, run the pipeline directly.
+    if request.selected_model != "agent-mode":
+        print(f"✅ User selected specific model: '{request.selected_model}'. Bypassing agent.")
+        return await run_rag_pipeline(request, current_user, mongo_db, model_name=request.selected_model)
 
-    return await run_rag_pipeline(request, current_user, mongo_db, model_name=model_to_use)
+    # --- AGENT MODE: TRIAGE ---
+    print("🤖 Entering Agent Mode: Triage...")
+    triage_llm = ChatOllama(model="llama3.1:8b", temperature=0, format="json", base_url=OLLAMA_BASE_URL)
+    triage_chain = triage_prompt | triage_llm | StrOutputParser()
+    
+    triage_response_str = await triage_chain.ainvoke({"question": request.prompt})
+    
+    complexity = "Simple" # Default to simple if JSON parsing fails
+    try:
+        triage_json = json.loads(triage_response_str)
+        complexity = triage_json.get("complexity", "Simple")
+        print(f"🤖 Triage decision: '{complexity}'. Reason: {triage_json.get('reasoning')}")
+    except json.JSONDecodeError:
+        print(f"⚠️ Warning: Triage agent did not return valid JSON. Defaulting to Simple workflow. Response was: {triage_response_str}")
+
+    # Route to the appropriate workflow
+    if complexity == "Complex":
+        return await run_multi_agent_workflow(request, current_user, mongo_db)
+    else: # Simple
+        return await run_performance_aware_router(request, current_user, mongo_db)

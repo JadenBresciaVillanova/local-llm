@@ -41,6 +41,7 @@ pypdf="5.7.0"
 asyncio="3.4.3"
 langchain-experimental="0.3.4"
 sentence-transformers="5.0.0"
+docker = "7.1.0"
 
 
 [tool.pylance]

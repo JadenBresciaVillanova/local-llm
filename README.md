@@ -66,9 +66,10 @@ The application is designed with a decoupled front-end and back-end architecture
     *   **MongoDB** stores unstructured data like chat conversation history and file metadata (including raw content for the "Direct Read" strategy).
 4.  **Agentic Core:** This is the brain of the backend. When a chat request arrives in "agent mode," a Triage model first classifies its complexity. Simple prompts are routed to an efficient model. Complex prompts trigger the multi-step `run_multi_agent_workflow`, which uses a Planner LLM to orchestrate calls to various worker LLMs based on their strengths.
 5.  **Observability Pipeline:** The FastAPI application emits structured logs and events to a **Kafka** topic. A separate consumer (or direct integration) could process these. **Prometheus** scrapes metrics directly from a `/metrics` endpoint on the backend, and **Grafana** visualizes this data in dashboards.
-
-<img width="491" height="801" alt="image" src="https://github.com/user-attachments/assets/c9f2f9e7-15fb-4c6c-af5b-207afc20866c" />
-
+   
+<p align="center">
+  <img width="491" height="801" alt="image" src="https://github.com/user-attachments/assets/c9f2f9e7-15fb-4c6c-af5b-207afc20866c" />
+</p>
 
 ## Getting Started
 

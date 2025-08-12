@@ -36,12 +36,12 @@ This platform serves as a powerful sandbox for exploring the capabilities of loc
 
 ## Key Features
 
--   **🤖 Intelligent Agentic Chat:** Go beyond simple Q&A. An agentic router analyzes prompt complexity and deploys specialized models for multi-step reasoning, summarization, and code generation.
--   **📚 Retrieval-Augmented Generation (RAG):** Upload multiple documents (`.txt`, `.docx`, etc.) and select which ones the AI should use as context for its answers, turning it into a personalized knowledge expert.
--   **🧠 Smart Context Handling:** The system intelligently decides whether to read a small file's full content for perfect accuracy or use a chunked vector search for large documents to ensure scalability.
--   **🔐 Secure & Private:** The entire stack is self-hosted with Docker. Your data and conversations never leave your machine. User access is secured via GitHub OAuth2.
--   **📊 Real-time Observability:** A full MLOps stack featuring Kafka for event logging, Prometheus for metrics, and Grafana for live dashboards provides deep insights into system performance and usage.
--   **✨ Modern Full-Stack UI:** A responsive and intuitive frontend built with Next.js and Tailwind CSS, featuring dedicated pages for Chat, Document Management, Model Viewing, and Chat History.
+-   ** Intelligent Agentic Chat:** Go beyond simple Q&A. An agentic router analyzes prompt complexity and deploys specialized models for multi-step reasoning, summarization, and code generation.
+-   ** Retrieval-Augmented Generation (RAG):** Upload multiple documents (`.txt`, `.docx`, etc.) and select which ones the AI should use as context for its answers, turning it into a personalized knowledge expert.
+-   ** Smart Context Handling:** The system intelligently decides whether to read a small file's full content for perfect accuracy or use a chunked vector search for large documents to ensure scalability.
+-   ** Secure & Private:** The entire stack is self-hosted with Docker. Your data and conversations never leave your machine. User access is secured via GitHub OAuth2.
+-   ** Real-time Observability:** A full MLOps stack featuring Kafka for event logging, Prometheus for metrics, and Grafana for live dashboards provides deep insights into system performance and usage.
+-   ** Modern Full-Stack UI:** A responsive and intuitive frontend built with Next.js and Tailwind CSS, featuring dedicated pages for Chat, Document Management, Model Viewing, and Chat History.
 
 ## Tech Stack
 

@@ -68,7 +68,8 @@ The application is designed with a decoupled front-end and back-end architecture
 5.  **Observability Pipeline:** The FastAPI application emits structured logs and events to a **Kafka** topic. A separate consumer (or direct integration) could process these. **Prometheus** scrapes metrics directly from a `/metrics` endpoint on the backend, and **Grafana** visualizes this data in dashboards.
 
 <p align="center">
-  <img alt="Architecture Diagram Placeholder" src="https://i.imgur.com/your-architecture-diagram-link.png" width="80%">
+<img width="491" height="801" alt="image" src="https://github.com/user-attachments/assets/34cda744-4902-4d7d-9fd0-4da76ea17cdd" />
+" width="80%">
   <br/>
   <i>(Placeholder for your architecture diagram)</i>
 </p>

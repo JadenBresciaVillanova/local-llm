@@ -1,494 +1,4 @@
-# import datetime
-# import os
-# import json
-# import time
-# from typing import List
-# from fastapi import APIRouter, Depends, HTTPException
-# from motor.motor_asyncio import AsyncIOMotorClient
-# from bson import ObjectId
-
-# # LangChain Imports
-# from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
-# from langchain_core.output_parsers import StrOutputParser
-# from langchain.chains import LLMChain
-# from langchain_community.vectorstores.pgvector import PGVector
-# from langchain_ollama import ChatOllama, OllamaEmbeddings
-# from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-# from langchain.retrievers.document_compressors import CrossEncoderReranker
-# from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
-
-# # Local Imports
-# from backend.db.session import SYNC_DATABASE_URL
-# from backend.schemas.chat_schema import ChatRequest, ChatResponse, TokenCounts
-# from backend.api.auth_utils import get_current_user
-# from backend.models.user import User
-# from backend.db.mongodb import get_mongo_db
-# from backend.services.sandbox_service import SandboxService
-# from backend.services.metrics_service import MetricsService
-# from backend.services.kafka_logger import get_kafka_logger
-
-# # --- Environment Setup & Constants ---
-# router = APIRouter()
-# OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-
-# # --- 1. PROMPT TEMPLATES ---
-
-# # Prompt 1: The Triage Agent - Classifies query complexity
-# TRIAGE_PROMPT_TEMPLATE = """
-# You are a master AI dispatcher. Your first task is to analyze the user's query and classify it into one of two categories: "Simple" or "Complex".
-
-# - A "Simple" query is a single, self-contained request that can be answered by one model. Examples: "Write a function to do X", "What is Y?", "Summarize this text".
-# - A "Complex" query involves multiple distinct steps, requires combining different skills (e.g., coding AND summarization), or implies a sequence of actions. Examples: "Analyze this code for bugs AND write a report", "Compare document A and document B and then write a poem about the result".
-
-# You must respond with a JSON object containing two keys:
-# 1. "complexity": Your classification, either "Simple" or "Complex".
-# 2. "reasoning": A brief, one-sentence explanation for your choice.
-
-# User Query:
-# {question}
-
-# Triage Decision:
-# """
-# triage_prompt = PromptTemplate.from_template(TRIAGE_PROMPT_TEMPLATE)
-
-# # Prompt 2: The Performance-Aware Router - Selects the best model for SIMPLE tasks
-# PERFORMANCE_ROUTER_PROMPT_TEMPLATE = """
-# You are an efficiency-focused AI dispatcher. Your goal is to choose the model with the best balance of quality, speed, and resource cost for the user's task.
-
-# Model Performance Profile:
-# [
-#   {{
-#     "name": "llama3.1:8b",
-#     "quality": 8,
-#     "speed": 7,
-#     "resource_cost": 6,
-#     "strengths": "General, RAG, reliable"
-#   }},
-#   {{
-#     "name": "codellama:7b",
-#     "quality": 9,
-#     "speed": 6,
-#     "resource_cost": 7,
-#     "strengths": "Complex code, algorithms"
-#   }},
-#   {{
-#     "name": "gemma:7b",
-#     "quality": 8,
-#     "speed": 9,
-#     "resource_cost": 5,
-#     "strengths": "Fast, general, good at simple code"
-#   }},
-#   {{
-#     "name": "dolphin-mistral:7b",
-#     "quality": 8,
-#     "speed": 8,
-#     "resource_cost": 6,
-#     "strengths": "Creative, less filtered code & text"
-#   }},
-#   {{
-#     "name": "deepseek-r1:7b",
-#     "quality": 9,
-#     "speed": 7,
-#     "resource_cost": 6,
-#     "strengths": "Reasoning-focused, balanced performance"
-#   }},
-#   {{
-#     "name": "gpt-oss:20b",
-#     "quality": 10,
-#     "speed": 5,
-#     "resource_cost": 9,
-#     "strengths": "Very high quality, complex reasoning & generation"
-#   }}, 
-#   {{
-#     "name": "qwen3:8b",
-#     "quality": 9,
-#     "speed": 6,
-#     "resource_cost": 7,
-#     "strengths": "Hybrid reasoning, multilingual, long context support"
-#   }}
-# ]
-
-# Based on the User Query, respond with ONLY the "name" value of the chosen model.
-
-# User Query:
-# {question}
-
-# Chosen Model:
-# """
-# performance_router_prompt = PromptTemplate.from_template(PERFORMANCE_ROUTER_PROMPT_TEMPLATE)
-
-# # Prompt 3 & 4: For query rewriting and final RAG generation (unchanged)
-# REWRITE_PROMPT_TEMPLATE = """
-# Based on the chat history below, formulate a standalone question that can be understood
-# without the chat history. Do NOT answer the question, just reformulate it if needed,
-# otherwise return it as is.
-
-# Chat History:
-# {chat_history}
-
-# Latest User Question:
-# {question}
-
-# Standalone Question:
-# """
-# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
-
-# # This is the default prompt for the main RAG task.
-# DEFAULT_RAG_PROMPT_TEMPLATE = """
-# You are an expert assistant. Use ONLY the following pieces of context to answer the user's question.
-# If the answer is not in the context, just say you don't have enough information from the documents.
-
-# CONTEXT:
-# {context}
-
-# QUESTION:
-# {question}
-
-# ANSWER:
-# """
-# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
-
-# CODE_PROMPT_TEMPLATE = """
-# You are an expert programmer and master of algorithms. Provide a clear, concise, and correct code solution to the user's request.
-# Explain the code briefly if necessary. Use the following context if it is relevant.
-
-# CONTEXT:
-# {context}
-
-# REQUEST:
-# {question}
-
-# CODE:
-# """
-# code_prompt = PromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
-
-# TOOL_USER_PROMPT_TEMPLATE = """
-# You are an intelligent project manager AI. Your goal is to fully answer the user's request by breaking it down into a series of logical steps and executing them in order.
-
-# **CRITICAL INSTRUCTIONS:**
-# 1.  **Analyze Request:** First, analyze the User's ENTIRE request to understand all the required parts.
-# 2.  **Review History & Progress:** Next, carefully review the 'Conversation History' to see what steps you have ALREADY COMPLETED. Do NOT repeat a step if you see a corresponding 'Observation' in the history.
-# 3.  **Decide NEXT Step:** Based on your analysis and the progress you've made, decide the single NEXT logical step required to move closer to a full answer.
-# 4.  **Select Best Model:** For that single step, consult the 'Model Performance Profile' and select the BEST model for the job. Use the `call_model` tool.
-# 5.  **Synthesize Final Answer:** When, and only when, all parts of the user's original request have been addressed in the history, you MUST use the `final_answer` tool to combine all your previous 'Observations' into a single, complete response.
-
-# ---
-# **Model Performance Profile (Your Available Tools):**
-# [
-#   {{ "name": "llama3.1:8b", "strengths": "Best for high-level reasoning, planning, summarization, and explaining complex topics." }},
-#   {{ "name": "codellama:7b", "strengths": "Specialist for writing, debugging, and explaining code." }},
-#   {{ "name": "gemma:7b", "strengths": "Very fast for simple, self-contained tasks like reformatting, extracting specific information, or basic counting." }},
-#   {{ "name": "gpt-oss:20b", "strengths": "Your most powerful model. Use for highly complex tasks or when the highest quality is critical." }}
-# ]
-# ---
-
-# **JSON TOOL FORMATS:**
-
-# 1.  **To execute a step:**
-#     `{{"tool_to_use": "call_model", "model": "name_of_model_from_profile", "task": "A clear, specific, and self-contained task for the model to perform."}}`
-
-# 2.  **To give the final answer:**
-#     `{{"final_answer": "Your complete and final response, synthesized from all previous 'Observations'."}}`
-
-# ---
-# **FULL CONVERSATION SO FAR:**
-# User Request: {question}
-
-# Conversation History (Your previous thoughts and the results):
-# {history}
-
-# **YOUR NEXT ACTION (A single JSON object):**
-# """
-
-# # Update the prompt variable to be used by the chain
-# tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
-
-# # Make sure to update the variable in your code
-# tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
-# tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
-
-# tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
-
-# rewrite_prompt = PromptTemplate.from_template(REWRITE_PROMPT_TEMPLATE)
-# default_rag_prompt = PromptTemplate.from_template(DEFAULT_RAG_PROMPT_TEMPLATE)
-# code_prompt = PromptTemplate.from_template(CODE_PROMPT_TEMPLATE)
-# PROMPT_FOR_MODEL = { "codellama:7b": code_prompt, "gemma:7b": code_prompt, "dolphin-mistral:7b": code_prompt, "gpt-oss:20b": code_prompt,  "deepseek-r1:7b": code_prompt}
-
-# # --- Initialize Static Models ---
-# print("Initializing static models (embeddings, re-ranker)...")
-# embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
-# cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-# output_parser = StrOutputParser()
-# print("Static models initialized successfully.")
-
-
-
-# async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
-#     print("🚀 Entering Stateful Multi-Model Agent Workflow...")
-    
-#     # Step 1: Retrieve context from files (Unchanged)
-#     final_context_docs = []
-#     context_str = ""
-#     if request.selected_file_ids:
-#         # ... your existing context retrieval logic ...
-#         print(f"📄 User has selected {len(request.selected_file_ids)} file(s). Retrieving context...")
-#         vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
-#         base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id), "file_id": {"$in": [str(fid) for fid in request.selected_file_ids]}}})
-#         reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
-#         compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
-#         final_context_docs = await compression_retriever.ainvoke(request.prompt)
-        
-#         if final_context_docs:
-#             context_str = "\n\n--- DOCUMENT CONTEXT ---\n" + "\n".join([doc.page_content for doc in final_context_docs])
-#             print(f"✅ Retrieved {len(final_context_docs)} relevant document chunks for agent context.")
-#     else:
-#         print("✅ No files selected. Agent will work without document context.")
-
-#     # Step 2: Initialize the Planner/Agent
-#     planner_llm = ChatOllama(model="llama3.1:8b", temperature=0, format="json", base_url=OLLAMA_BASE_URL)
-#     planner_chain = tool_user_prompt | planner_llm | StrOutputParser()
-
-#     # Step 3: Begin the agent execution loop
-#     agent_history: List[str] = []
-#     response_text = ""
-#     MAX_STEPS = 3
-
-#     for i in range(MAX_STEPS):
-#         print(f"\n--- Agent Step {i + 1}/{MAX_STEPS} ---")
-        
-#         history_str = "\n".join(agent_history)
-#         # We combine the user's prompt and the context into the 'question' field for the planner
-#         full_user_request = f"{request.prompt}\n\n{context_str}"
-        
-#         llm_decision_str = await planner_chain.ainvoke({"question": full_user_request, "history": history_str})
-#         print(f"🧠 Planner's Raw JSON Decision:\n{llm_decision_str}")
-#         agent_history.append(f"Step {i+1} Thought:\n{llm_decision_str}")
-        
-#         try:
-#             decision_json = json.loads(llm_decision_str)
-            
-#             if decision_json.get("tool_to_use") == "call_model":
-#                 print("✅ Agent requested to call a model tool.")
-#                 model_to_call = decision_json.get("model")
-#                 task_for_model = decision_json.get("task")
-
-#                 if not model_to_call or not task_for_model:
-#                     observation = "Observation: Invalid tool call. Missing 'model' or 'task'."
-#                     print(f"⚠️ {observation}")
-#                     agent_history.append(observation)
-#                     continue
-
-#                 print(f"   - Model Selected: '{model_to_call}', Task: '{task_for_model}'")
-                
-#                 worker_llm = ChatOllama(model=model_to_call, temperature=0, base_url=OLLAMA_BASE_URL)
-#                 worker_prompt = PromptTemplate.from_template("Based on the Full Context, perform your specific task.\n\nFULL CONTEXT:\n{context}\n\nYOUR SPECIFIC TASK:\n{task}\n\nYOUR RESULT:")
-                
-#                 # IMPORTANT: The worker needs the full history to know what was done before.
-#                 full_worker_context = f"Original Request: {full_user_request}\n\nHistory of Steps Taken:\n{history_str}"
-#                 tool_result = await worker_chain.ainvoke({"context": full_worker_context, "task": task_for_model})
-
-#                 print(f"   - ✅ Tool Result: '{tool_result[:200]}...'")
-#                 observation = f"Observation from calling model '{model_to_call}':\n{tool_result}"
-#                 agent_history.append(observation)
-#                 continue
-
-#             elif "final_answer" in decision_json:
-#                 print("🏁 Agent decided to give the Final Answer.")
-#                 response_text = decision_json["final_answer"]
-#                 break
-            
-#             else:
-#                 observation = "Observation: Your response was not a recognized tool. Use 'call_model' or 'final_answer'."
-#                 print(f"⚠️ {observation}")
-#                 agent_history.append(observation)
-#                 continue
-
-#         except (json.JSONDecodeError, KeyError):
-#             observation = "Observation: Your last response was not valid JSON. You must respond with a single JSON object."
-#             print(f"⚠️ {observation} | Raw response was: {llm_decision_str}")
-#             agent_history.append(observation)
-#             continue
-    
-#     else:
-#         # ... (unchanged logic for max steps)
-#         print("⚠️ Agent reached max steps without providing a final answer.")
-#         last_observation = next((line for line in reversed(agent_history) if line.startswith("Observation")), "The agent could not complete the request.")
-#         response_text = f"The agent reached its maximum number of steps ({MAX_STEPS}).\n\nLast known information:\n{last_observation}"
-
-#     # --- Save final result to MongoDB (unchanged) ---
-#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
-#     # ... (rest of your database logic is fine)
-#     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
-#     await mongo_db.conversations.update_one(
-#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
-#         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
-#         upsert=True
-#     )
-#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=None)
-
-
-# # --- WORKFLOW A: PERFORMANCE-AWARE ROUTER ---
-# async def run_performance_aware_router(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
-#     print("✅ Query is simple. Engaging Performance-Aware Router...")
-#     router_llm = ChatOllama(model="llama3.1:8b", temperature=0, base_url=OLLAMA_BASE_URL)
-#     model_selection_chain = performance_router_prompt | router_llm | StrOutputParser()
-#     chosen_model = await model_selection_chain.ainvoke({"question": request.prompt})
-#     model_to_use = chosen_model.strip().lower().split()[0].replace('`', '')
-#     print(f"📈 Performance router has chosen model: '{model_to_use}'")
-#     # Delegate the actual work to the main RAG pipeline
-#     return await run_rag_pipeline(request, current_user, mongo_db, model_name=model_to_use)
-
-
-# # --- RAG PIPELINE (THE ENGINE) ---
-# async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient, model_name: str) -> ChatResponse:
-#     # This function is the same as the last version, no changes needed.
-#     print(f"--- Running RAG Pipeline with model: '{model_name}' ---")
-#     # ... (The full run_rag_pipeline logic from the previous step goes here)
-#     # It starts with `llm = ChatOllama(...)` and ends with `return ChatResponse(...)`
-
-#     llm = ChatOllama(model=model_name, temperature=request.temperature, top_p=request.top_p, num_predict=request.max_tokens, base_url=OLLAMA_BASE_URL)
-#     chat_history_str = ""
-#     if request.conversation_id:
-#         convo = await mongo_db.conversations.find_one({"_id": ObjectId(request.conversation_id), "user_id": str(current_user.id)})
-#         if convo and convo.get("messages"):
-#             messages = [f"{msg['role']}: {msg['message']}" for msg in convo["messages"]]
-#             chat_history_str = "\n".join(messages)
-#     query_rewriter_chain = LLMChain(llm=llm, prompt=rewrite_prompt, output_parser=StrOutputParser())
-#     response_dict = await query_rewriter_chain.ainvoke({"chat_history": chat_history_str, "question": request.prompt})
-#     rewritten_query = response_dict['text']
-#     print(f"Rewritten query for retrieval: '{rewritten_query}'")
-#     final_context_docs = []
-#     if request.selected_file_ids:
-#         print(f"✅ User has selected {len(request.selected_file_ids)} file(s). Attempting to retrieve context...")
-#         vectorstore = PGVector(connection_string=SYNC_DATABASE_URL, embedding_function=embeddings)
-#         base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 20, "filter": {"user_id": str(current_user.id), "file_id": {"$in": [str(fid) for fid in request.selected_file_ids]}}})
-#         reranker = CrossEncoderReranker(model=cross_encoder_model, top_n=5)
-#         compression_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=base_retriever)
-#         final_context_docs = await compression_retriever.ainvoke(rewritten_query)
-#     else:
-#         print("✅ No files selected by user. Skipping context retrieval.")
-#     print(f"Retrieved {len(final_context_docs)} final documents for context.")
-#     final_rag_prompt = PROMPT_FOR_MODEL.get(model_name)
-#     if not final_rag_prompt:
-#         if request.custom_prompt_template:
-#             print("✅ Using custom prompt template from user.")
-#             try: final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
-#             except Exception as e:
-#                 print(f"⚠️ Warning: Invalid custom prompt template. Using default. Error: {e}")
-#                 final_rag_prompt = default_rag_prompt
-#         else: final_rag_prompt = default_rag_prompt
-#     else: print(f"✅ Using specialized prompt for model '{model_name}'.")
-#     llm_response = None
-#     if final_context_docs:
-#         print("Found relevant documents. Generating answer with RAG.")
-#         context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs])
-#         rag_chain = final_rag_prompt | llm
-#         llm_response = await rag_chain.ainvoke({"context": context_str, "question": rewritten_query})
-#     else:
-#         print("No documents in context. Generating answer from general knowledge.")
-#         rag_chain = final_rag_prompt | llm
-#         llm_response = await rag_chain.ainvoke({"context": "", "question": rewritten_query})
-#     response_text = llm_response.content
-#     response_metadata = llm_response.response_metadata
-#     prompt_tokens = response_metadata.get("prompt_eval_count", 0)
-#     response_tokens = response_metadata.get("eval_count", 0)
-#     token_counts = TokenCounts(prompt_tokens=prompt_tokens, response_tokens=response_tokens, total_tokens=prompt_tokens + response_tokens)
-#     convo_id_obj = ObjectId(request.conversation_id) if request.conversation_id else ObjectId()
-#     new_messages = [{"role": "user", "message": request.prompt}, {"role": "ai", "message": response_text}]
-#     await mongo_db.conversations.update_one(
-#         {"_id": convo_id_obj, "user_id": str(current_user.id)},
-#         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
-#         upsert=True
-#     )
-#     print(f"Successfully saved to conversation. ID: {convo_id_obj}")
-#     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=token_counts)
-
-
-# # --- MAIN CHAT HANDLER (THE TRIAGE ROUTER) ---
-# @router.post("/chat", response_model=ChatResponse)
-# async def handle_chat_request(
-#     request: ChatRequest,
-#     current_user: User = Depends(get_current_user),
-#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db),
-# ):
-#     start_time = time.time()
-#     kafka_logger = get_kafka_logger()
-    
-#     print(f"\n--- New Chat Request for user: {current_user.email} ---")
-#     print(f"Original question: '{request.prompt}'")
-    
-#     try:
-#         # Log chat message sent event
-#         kafka_logger.log_chat_message_sent(
-#             user_id=current_user.email,
-#             message=request.prompt,
-#             conversation_id=request.conversation_id or "new_conversation",
-#             model_name=request.selected_model
-#         )
-        
-#         # If user selected a specific model, run the pipeline directly.
-#         if request.selected_model != "agent-mode":
-#             print(f"✅ User selected specific model: '{request.selected_model}'. Bypassing agent.")
-#             response = await run_rag_pipeline(request, current_user, mongo_db, model_name=request.selected_model)
-#         else:
-#             # --- AGENT MODE: TRIAGE ---
-#             print("Entering Agent Mode: Triage...")
-#             triage_llm = ChatOllama(model="llama3.1:8b", temperature=0, format="json", base_url=OLLAMA_BASE_URL)
-#             triage_chain = triage_prompt | triage_llm | StrOutputParser()
-            
-#             triage_response_str = await triage_chain.ainvoke({"question": request.prompt})
-            
-#             complexity = "Simple" # Default to simple if JSON parsing fails
-#             try:
-#                 triage_json = json.loads(triage_response_str)
-#                 complexity = triage_json.get("complexity", "Simple")
-#                 print(f"Triage decision: '{complexity}'. Reason: {triage_json.get('reasoning')}")
-#             except json.JSONDecodeError:
-#                 print(f"⚠️ Warning: Triage agent did not return valid JSON. Defaulting to Simple workflow. Response was: {triage_response_str}")
-
-#             # Route to the appropriate workflow
-#             if complexity == "Complex":
-#                 response = await run_multi_agent_workflow(request, current_user, mongo_db)
-#             else: 
-#                 response = await run_performance_aware_router(request, current_user, mongo_db)
-        
-#         # Record success metrics
-#         end_time = time.time()
-#         response_time_ms = int((end_time - start_time) * 1000)
-        
-#         MetricsService.record_chat_request(current_user.email, "success")
-#         MetricsService.record_llm_response_time(
-#             model_name=request.selected_model or "agent-mode",
-#             user_email=current_user.email,
-#             duration=end_time - start_time
-#         )
-        
-#         # Log chat message received event
-#         kafka_logger.log_chat_message_received(
-#             user_id=current_user.email,
-#             response_length=len(response.response),
-#             conversation_id=request.conversation_id or "new_conversation",
-#             model_name=request.selected_model or "agent-mode",
-#             response_time_ms=response_time_ms
-#         )
-        
-#         return response
-        
-#     except Exception as e:
-#         # Record failure metrics
-#         end_time = time.time()
-#         MetricsService.record_chat_request(current_user.email, "failure")
-#         MetricsService.record_chat_failure(current_user.email, type(e).__name__)
-        
-#         # Log error event
-#         kafka_logger.log_error_occurred(
-#             user_id=current_user.email,
-#             error_type=type(e).__name__,
-#             error_message=str(e),
-#             endpoint="/api/chat"
-#         )
-        
-#         raise e
+#//backend/api/chat.py
 import datetime
 import os
 import json
@@ -524,7 +34,6 @@ VALID_MODELS = [
     "llama3.1:8b", "codellama:7b", "gemma:7b", "dolphin-mistral:7b", 
     "deepseek-r1:7b", "gpt-oss:20b", "qwen3:8b"
 ]
-
 
 # --- 1. PROMPT TEMPLATES ---
 
@@ -597,12 +106,36 @@ You are a methodical and precise project manager AI. Your single most important 
     -   Use the `final_answer` tool. Your response should synthesize the 'Observations' to directly answer the user's original request. **Do not add any new analysis in the final answer.**
 
 ---
-**Model Performance Profile:**
+**Model Performance Profile (Your Available Tools):**
 [
-  // ... your full model list ...
-  {{ "name": "llama3.1:8b", "strengths": "Best for reasoning, planning, and summarization." }},
-  {{ "name": "codellama:7b", "strengths": "Specialist for code generation and explanation." }},
-  {{ "name": "gemma:7b", "strengths": "Fast for simple, single-shot tasks from provided text." }}
+  {{
+    "name": "llama3.1:8b",
+    "strengths": "Excellent for general reasoning, summarization, understanding documents, and planning. Your 'thinking' brain."
+  }},
+  {{
+    "name": "codellama:7b",
+    "strengths": "Specialist for writing, debugging, and explaining complex code, especially Python and algorithms."
+  }},
+  {{
+    "name": "gemma:7b",
+    "strengths": "Very fast for simple, general tasks like basic text generation, reformatting, or simple code snippets."
+  }},
+  {{
+    "name": "dolphin-mistral:7b",
+    "strengths": "Best for creative tasks, writing in a specific style, or generating less-filtered/more 'human-like' text and code."
+  }},
+  {{
+    "name": "deepseek-r1:7b",
+    "strengths": "Strong reasoning and logic capabilities, a good balance between code and text understanding."
+  }},
+  {{
+    "name": "gpt-oss:20b",
+    "strengths": "The most powerful model. Use for highly complex reasoning, multi-faceted analysis, or when the highest quality output is required, despite being slower."
+  }}, 
+  {{
+    "name": "qwen3:8b",
+    "strengths": "Excellent for tasks involving multiple languages, long documents, or a hybrid of complex reasoning and generation."
+  }}
 ]
 
 ---
@@ -623,7 +156,6 @@ You are a methodical and precise project manager AI. Your single most important 
 **YOUR NEXT ACTION (A single JSON object based on the workflow above):**
 """
 tool_user_prompt = PromptTemplate.from_template(TOOL_USER_PROMPT_TEMPLATE)
-
 
 
 # Other General Prompts
@@ -691,17 +223,17 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
         
         # If semantic search fails, try to get ALL chunks from the selected files
         if not final_context_docs:
-            print("⚠️ Semantic search found no relevant chunks. Trying to retrieve ALL chunks from selected files...")
+            print("Semantic search found no relevant chunks. Trying to retrieve ALL chunks from selected files...")
             try:
                 # Use a very broad search query to get all chunks
                 fallback_docs = await base_retriever.ainvoke("document content text")
                 if fallback_docs:
                     # Limit to prevent overwhelming the context
                     final_context_docs = fallback_docs[:10] 
-                    print(f"✅ Fallback: Retrieved {len(final_context_docs)} chunks from selected file(s).")
+                    print(f"Fallback: Retrieved {len(final_context_docs)} chunks from selected file(s).")
                 else:
                     # Last resort: try without any query filter
-                    print("🔄 Trying without query filtering...")
+                    print("Trying without query filtering...")
                     vectorstore_simple = PGVector(
                         connection_string=SYNC_DATABASE_URL, 
                         embedding_function=embeddings
@@ -712,18 +244,18 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
                     )
                     final_context_docs = await simple_retriever.ainvoke("text")
                     if final_context_docs:
-                        print(f"✅ Simple retrieval: Got {len(final_context_docs)} chunks.")
+                        print(f"Simple retrieval: Got {len(final_context_docs)} chunks.")
             except Exception as e:
-                print(f"⚠️ Error in fallback retrieval: {e}")
+                print(f"Error in fallback retrieval: {e}")
         
         if final_context_docs:
             document_context_str = "\n".join([doc.page_content for doc in final_context_docs])
-            print(f"✅ Final: Using {len(final_context_docs)} document chunks for context.")
+            print(f"Final: Using {len(final_context_docs)} document chunks for context.")
         else:
-            print("❌ Could not retrieve any document content from selected files.")
+            print("Could not retrieve any document content from selected files.")
 
     else:
-        print("✅ No files selected by user. Agent will proceed without document context.")
+        print("No files selected by user. Agent will proceed without document context.")
 
     # Step 2: Initialize the Planner/Agent using the V7 Context-Aware Prompt
     planner_llm = ChatOllama(model="llama3.1:8b", temperature=0, format="json", base_url=OLLAMA_BASE_URL)
@@ -747,20 +279,20 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
             "document_context": document_context_str if document_context_str else "No document context provided.",
             "history": history_str
         })
-        print(f"🧠 Planner's Raw JSON Decision:\n{llm_decision_str}")
+        print(f"Planner's Raw JSON Decision:\n{llm_decision_str}")
         agent_history.append(f"Step {step_count} Thought:\n{llm_decision_str}")
         
         try:
             decision_json = json.loads(llm_decision_str)
             
             if decision_json.get("tool_to_use") == "call_model":
-                print("✅ Agent requested to call a model tool.")
+                print("Agent requested to call a model tool.")
                 model_to_call = decision_json.get("model")
                 task_for_model = decision_json.get("task")
 
                 if not model_to_call or not task_for_model:
                     observation = "Observation: Invalid tool call. Missing 'model' or 'task'."
-                    print(f"⚠️ {observation}")
+                    print(f"  {observation}")
                     agent_history.append(observation)
                     # Don't continue here - count this as a step and move forward
                 else:
@@ -771,7 +303,7 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
                     
                     # Validate model name
                     if model_to_call not in VALID_MODELS:
-                        print(f"⚠️ Invalid model '{model_to_call}'. Using llama3.1:8b instead.")
+                        print(f"  Invalid model '{model_to_call}'. Using llama3.1:8b instead.")
                         model_to_call = "llama3.1:8b"
                     
                     print(f"   - Final model to use: '{model_to_call}'")
@@ -806,7 +338,7 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
                             "task": task_for_model
                         })
 
-                    print(f"   - ✅ Tool Result: '{tool_result[:200]}...'")
+                    print(f"   -  Tool Result: '{tool_result[:200]}...'")
                     observation = f"Observation from calling model '{model_to_call}':\n{tool_result}"
                     agent_history.append(observation)
 
@@ -817,12 +349,12 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
             
             else:
                 observation = "Observation: Your response was not a recognized tool. Use 'call_model' or 'final_answer'."
-                print(f"⚠️ {observation}")
+                print(f" {observation}")
                 agent_history.append(observation)
 
         except (json.JSONDecodeError, KeyError) as e:
             observation = f"Observation: Your last response was not valid JSON. Error: {str(e)}. You must respond with a single JSON object."
-            print(f"⚠️ {observation} | Raw response was: {llm_decision_str}")
+            print(f" {observation} | Raw response was: {llm_decision_str}")
             agent_history.append(observation)
 
     # If we exit the loop without a final answer
@@ -844,7 +376,7 @@ async def run_multi_agent_workflow(request: ChatRequest, current_user: User, mon
 
 # --- WORKFLOW B: PERFORMANCE-AWARE ROUTER (FOR SIMPLE TASKS) ---
 async def run_performance_aware_router(request: ChatRequest, current_user: User, mongo_db: AsyncIOMotorClient) -> ChatResponse:
-    print("✅ Query is simple. Engaging Performance-Aware Router...")
+    print(" Query is simple. Engaging Performance-Aware Router...")
     router_llm = ChatOllama(model="llama3.1:8b", temperature=0, base_url=OLLAMA_BASE_URL)
     model_selection_chain = performance_router_prompt | router_llm | StrOutputParser()
     chosen_model_str = await model_selection_chain.ainvoke({"question": request.prompt})
@@ -857,10 +389,10 @@ async def run_performance_aware_router(request: ChatRequest, current_user: User,
             break
 
     if not model_to_use:
-        print(f"⚠️ Performance router returned an invalid model name: '{chosen_model_str}'. Defaulting to 'llama3.1:8b'.")
+        print(f" Performance router returned an invalid model name: '{chosen_model_str}'. Defaulting to 'llama3.1:8b'.")
         model_to_use = "llama3.1:8b"
     
-    print(f"📈 Performance router has chosen model: '{model_to_use}'")
+    print(f" Performance router has chosen model: '{model_to_use}'")
     return await run_rag_pipeline(request, current_user, mongo_db, model_name=model_to_use)
 
 
@@ -897,11 +429,11 @@ async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: A
     if request.custom_prompt_template:
         try: 
             final_rag_prompt = PromptTemplate.from_template(request.custom_prompt_template)
-            print("✅ Using custom prompt template from user.")
+            print(" Using custom prompt template from user.")
         except Exception as e:
             print(f"⚠️ Warning: Invalid custom prompt template. Using default. Error: {e}")
     else:
-        print(f"✅ Using specialized prompt for model '{model_name}' or default.")
+        print(f" Using specialized prompt for model '{model_name}' or default.")
 
     context_str = "\n\n---\n\n".join([doc.page_content for doc in final_context_docs]) if final_context_docs else "No context available."
     
@@ -921,7 +453,7 @@ async def run_rag_pipeline(request: ChatRequest, current_user: User, mongo_db: A
         {"$push": {"messages": {"$each": new_messages}}, "$setOnInsert": {"user_id": str(current_user.id), "created_at": datetime.datetime.now(datetime.timezone.utc)}},
         upsert=True
     )
-    print(f"✅ Successfully saved to conversation. ID: {convo_id_obj}")
+    print(f" Successfully saved to conversation. ID: {convo_id_obj}")
     return ChatResponse(response=response_text, conversation_id=str(convo_id_obj), token_counts=token_counts)
 
 
@@ -944,12 +476,12 @@ async def handle_chat_request(
         
         # --- PATH 1: USER OVERRIDE ---
         if request.selected_model != "agent-mode":
-            print(f"✅ User selected specific model: '{request.selected_model}'. Bypassing agent.")
+            print(f" User selected specific model: '{request.selected_model}'. Bypassing agent.")
             response = await run_rag_pipeline(request, current_user, mongo_db, model_name=request.selected_model)
         
         # --- PATH 2: AGENT MODE ---
         else:
-            print("🤖 Entering Agent Mode: Triage...")
+            print(" Entering Agent Mode: Triage...")
             
             # Enhanced triage input to include file context information
             triage_input = request.prompt
@@ -965,13 +497,13 @@ async def handle_chat_request(
             try:
                 triage_json = json.loads(triage_response_str)
                 complexity = triage_json.get("complexity", "Simple")
-                print(f"🧠 Triage decision: '{complexity}'. Reason: {triage_json.get('reasoning')}")
+                print(f" Triage decision: '{complexity}'. Reason: {triage_json.get('reasoning')}")
             except json.JSONDecodeError:
-                print(f"⚠️ Warning: Triage agent did not return valid JSON. Defaulting to Simple. Response: {triage_response_str}")
+                print(f" Warning: Triage agent did not return valid JSON. Defaulting to Simple. Response: {triage_response_str}")
             
             # Force complex routing when files are selected for better document handling
             if request.selected_file_ids and complexity == "Simple":
-                print("🔄 Overriding to Complex due to selected files for better document handling")
+                print(" Overriding to Complex due to selected files for better document handling")
                 complexity = "Complex"
 
             # Route to the appropriate workflow based on complexity

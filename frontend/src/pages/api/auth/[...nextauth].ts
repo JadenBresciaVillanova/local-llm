@@ -28,23 +28,6 @@ export const authOptions: AuthOptions = {
     //   clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     // }),
   ],
-  // callbacks: {
-  //   async jwt({ token, account }) {
-  //     if (account) {
-  //       token.accessToken = account.access_token;
-  //       token.provider = account.provider;
-  //     }
-  //     return token;
-  //   },
-  //   async session({ session, token }) {
-  //     // It's safer to type the session object
-  //     if (session?.user) {
-  //       (session as any).accessToken = token.accessToken;
-  //       (session as any).provider = token.provider;
-  //     }
-  //     return session;
-  //   },
-  // },
   callbacks: {
     async jwt({ token, account, profile }) {
       if (account) {

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from backend.db.session import get_db  # <--- FIX 1: Corrected import
+from backend.db.session import get_db  
 from backend.models.user import User
 from backend.schemas.user_schema import UserCreate, UserRead
 
@@ -12,7 +12,7 @@ router = APIRouter()
 @router.post("/auth/login", response_model=UserRead)
 async def login_or_create_user(
     user_data: UserCreate, 
-    db: AsyncSession = Depends(get_db)  # <--- FIX 2: Corrected dependency
+    db: AsyncSession = Depends(get_db)  
 ):
     """
     Called by the frontend after a successful OAuth login.

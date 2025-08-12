@@ -1,65 +1,4 @@
-# # backend/api/conversations.py
-# from fastapi import APIRouter, Depends, HTTPException
-# from motor.motor_asyncio import AsyncIOMotorClient
-# from typing import List
-# from pydantic import BaseModel, Field
-# import datetime
 
-# from backend.db.mongodb import get_mongo_db
-# from backend.models.user import User
-# from backend.api.auth_utils import get_current_user # Using the insecure one for now
-
-# router = APIRouter()
-
-# # Pydantic model for the response to ensure type safety
-# class ConversationPreview(BaseModel):
-#     id: str = Field(..., alias="_id")
-#     title: str
-#     created_at: datetime.datetime
-
-#     # class Config:
-#     #     allow_population_by_field_name = True
-#     #     json_encoders = {
-#     #        # MongoDB stores ObjectIDs, we need to convert them to strings for JSON
-#     #        'id': lambda v: str(v),
-#     #     }
-#     model_config = {
-#         "populate_by_name": True,
-#     }
-
-# @router.get("/conversations", response_model=List[ConversationPreview])
-# async def get_user_conversations(
-#     current_user: User = Depends(get_current_user),
-#     mongo_db: AsyncIOMotorClient = Depends(get_mongo_db)
-# ):
-#     """
-#     Fetches all conversations for the current user.
-#     The 'title' is generated from the user's first message.
-#     """
-#     conversations_cursor = mongo_db.conversations.find(
-#         {"user_id": str(current_user.id)},
-#         # Projection: only get necessary fields
-#         {"messages": {"$slice": 1}, "created_at": 1} 
-#     )
-    
-#     results = []
-#     async for convo in conversations_cursor:
-#         first_message = "New Conversation"
-#         if convo.get("messages"):
-#             # Find the first message from the user to use as a title
-#             user_message = next((msg for msg in convo["messages"] if msg.get("role") == "user"), None)
-#             if user_message:
-#                 # Truncate for a short title
-#                 first_message = (user_message["message"][:40] + '...') if len(user_message["message"]) > 40 else user_message["message"]
-
-#         results.append({
-#             "_id": str(convo["_id"]),
-#             "title": first_message,
-#             "created_at": convo["created_at"]
-#         })
-
-#     return results
-# backend/api/conversations.py
 import datetime
 import csv
 import io
@@ -77,10 +16,7 @@ from backend.api.auth_utils import get_current_user_from_query, get_current_user
 router = APIRouter()
 
 # --- Pydantic Schemas for this file ---
-
 class ConversationSummary(BaseModel):
-    # The response_model now validates against this shape.
-    # We no longer need the alias here since we are building the dict manually.
     id: str
     title: str
     summary: str
@@ -114,10 +50,6 @@ async def get_user_conversations(
     
     results = []
     async for convo in conversations_cursor:
-        # --- THIS IS THE FINAL FIX ---
-        # We will build a plain Python dictionary with the EXACT keys the frontend expects.
-        # This removes all ambiguity from Pydantic's aliasing and serialization.
-        
         title = convo.get("title")
         messages = convo.get("messages", [])
         if not title and messages:
@@ -139,9 +71,9 @@ async def get_user_conversations(
             "created_at": convo["created_at"]
         }
         results.append(clean_data)
-        # --- END FIX ---
 
     return results
+
 
 @router.get("/conversations/{convo_id}", response_model=ConversationDetail)
 async def get_conversation_details(
@@ -159,8 +91,6 @@ async def get_conversation_details(
     if not convo:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     
-    # We must also rename the _id to id before returning the raw dict
-    # so it matches the ConversationDetail Pydantic model.
     convo["id"] = str(convo["_id"])
     del convo["_id"]
     
@@ -172,8 +102,6 @@ async def get_conversation_details(
 
     return convo
 
-
-# ... (The rest of your endpoints remain unchanged) ...
 @router.put("/conversations/{convo_id}/title")
 async def update_conversation_title(
     convo_id: str,

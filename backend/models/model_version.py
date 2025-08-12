@@ -4,9 +4,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from uuid import UUID, uuid4
 # from backend.db.session import Base
 
-
 from .base import Base
-
 
 class ModelVersion(Base):
     __tablename__ = "model_versions"

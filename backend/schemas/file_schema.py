@@ -10,7 +10,7 @@ class FileMetadataRead(BaseModel):
     file_type: str
     upload_date: datetime.datetime
     processing_status: str
-    chunk_count: int  # <-- ADD THIS LINE
+    chunk_count: int  
 
     # Use the Pydantic V2 style for configuration
     model_config = ConfigDict(from_attributes=True)

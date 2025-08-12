@@ -6,7 +6,6 @@ from typing import List
 from uuid import UUID, uuid4
 from .base import Base
 
-
 from typing import List, TYPE_CHECKING
 
 if TYPE_CHECKING:

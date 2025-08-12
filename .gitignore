@@ -23,3 +23,6 @@ package-lock.json
 .mongo-data/
 .kafka-data/
 .zookeeper-data/
+.grafana-data/
+old_code
+backend/uploads

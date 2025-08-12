@@ -23,7 +23,6 @@ class FileService:
         """
         Saves an uploaded file to the disk and creates a metadata record in the DB.
         """
-        # ... (save file to disk logic) ...
         file_path = UPLOAD_DIR / file.filename
         try:
             with open(file_path, "wb") as buffer:
@@ -34,8 +33,6 @@ class FileService:
             raise
 
         file_size = file_path.stat().st_size
-        
-        # --- NEW STRATEGY ---
         
         # 1. Generate ID, create object, add, and commit.
         new_id: UUID = uuid4()

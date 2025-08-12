@@ -1,5 +1,7 @@
-Spliut Terminal
-1L. docker-compose down docker-compose up --build
+Split Terminal'
+* Make sure Docker Desktop Engine is Running
+1L. Cd into local-llm
+1L. docker-compose down; docker-compose up --build (Powershell)
 2R. cd frontend
 3R. npm run dev
 

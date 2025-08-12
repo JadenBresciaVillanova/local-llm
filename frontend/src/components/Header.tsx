@@ -32,6 +32,7 @@ export default function Header() {
                         <Link href="/chats" className={navLinkClasses('/chats')}>Past Chats</Link>
                         <Link href="/" className={navLinkClasses('/')}>Chat</Link>
                         <Link href="/docs" className={navLinkClasses('/docs')}>Docs</Link>
+                        <Link href="/metrics" className={navLinkClasses('/metrics')}>Metrics</Link>
                         <Link href="/models" className={navLinkClasses('/models')}>Models</Link>
                     </nav>
                     <div className="flex items-center space-x-2">

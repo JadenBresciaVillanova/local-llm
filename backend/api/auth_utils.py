@@ -1,9 +1,7 @@
 # backend/api/auth_utils.py
-
 from fastapi import Depends, HTTPException, status, Request, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-
 from backend.db.session import get_db
 from backend.models.user import User
 

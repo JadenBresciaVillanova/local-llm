@@ -3,7 +3,7 @@
 <p align="center">
   <img alt="Project Demo GIF" src="https://i.imgur.com/your-demo-link-here.gif" width="80%">
   <br/>
-  <i>A private, full-stack AI platform with advanced RAG and agentic capabilities, designed for absolute privacy and control.</i>
+  <i>A private, full-stack AI platform with advanced RAG and agentic capabilities, designed for absolute privacy.</i>
 </p>
 
 <p align="center">

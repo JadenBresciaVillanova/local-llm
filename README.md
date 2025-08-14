@@ -28,17 +28,17 @@
 
 ## About The Project
 
-This project is a self-hosted AI platform that allows you to run open-source large language models locally, leveraging the power of modern tools like Ollama. It provides a complete ecosystem from a sleek Next.js frontend to a robust FastAPI backend, all designed with absolute privacy and advanced functionality in mind.
+This project is a self-hosted AI platform that allows you to run open-source large language models locally, leveraging modern tools like Ollama. It provides a complete ecosystem from a Next.js frontend to a FastAPI backend, all designed with absolute privacy and advanced functionality in mind.
 
-The core of the platform is its powerful **Retrieval-Augmented Generation (RAG)** and **Agentic Workflow** systems. You can upload your own documents and have the AI use them as a knowledge base. A sophisticated agentic router analyzes your prompts to decide whether to use a single, efficient model for simple tasks or to orchestrate a multi-model pipeline for complex, multi-step queries that require reasoning and tool use.
+The core of the platform is its **Retrieval-Augmented Generation (RAG)** and **Agentic Workflow** systems. You can upload your own documents and have the AI use them as a knowledge base. An agentic router analyzes your prompts to decide whether to use a single, efficient model for simple tasks or to orchestrate a multi-model pipeline for complex, multi-step queries that require reasoning and tool use.
 
 This platform serves as a powerful sandbox for exploring the capabilities of local LLMs, MLOps, and full-stack AI application development.
 
 ## Key Features
 
--   ** Intelligent Agentic Chat:** Go beyond simple Q&A. An agentic router analyzes prompt complexity and deploys specialized models for multi-step reasoning, summarization, and code generation.
+-   ** Intelligent Agentic Chat:** An agentic router analyzes prompt complexity and deploys specialized models for multi-step reasoning, summarization, and code generation.
 -   ** Retrieval-Augmented Generation (RAG):** Upload multiple documents (`.txt`, `.docx`, etc.) and select which ones the AI should use as context for its answers, turning it into a personalized knowledge expert.
--   ** Smart Context Handling:** The system intelligently decides whether to read a small file's full content for perfect accuracy or use a chunked vector search for large documents to ensure scalability.
+-   ** Smart Context Handling:** The system intelligently uses a chunked vector search for large documents to ensure scalability.
 -   ** Secure & Private:** The entire stack is self-hosted with Docker. Your data and conversations never leave your machine. User access is secured via GitHub OAuth2.
 -   ** Real-time Observability:** A full MLOps stack featuring Kafka for event logging, Prometheus for metrics, and Grafana for live dashboards provides deep insights into system performance and usage.
 -   ** Modern Full-Stack UI:** A responsive and intuitive frontend built with Next.js and Tailwind CSS, featuring dedicated pages for Chat, Document Management, Model Viewing, and Chat History.
@@ -47,10 +47,10 @@ This platform serves as a powerful sandbox for exploring the capabilities of loc
 
 | Category         | Technologies                                                                                             |
 | ---------------- | -------------------------------------------------------------------------------------------------------- |
-| **Backend**      | Python, FastAPI, SQLAlchemy, Alembic, `asyncpg`, `motor`                                                   |
+| **Backend**      | Python, FastAPI, SQLAlchemy, Alembic, `asyncpg`, `motor`                                                 |
 | **Frontend**     | Next.js, TypeScript, Tailwind CSS, NextAuth.js, Axios                                                    |
 | **Databases**    | PostgreSQL (with `pgvector` extension for embeddings), MongoDB (for chat logs & file metadata)           |
-| **AI / LangChain** | LangChain, Ollama, `unstructured`, `python-docx`                                                           |
+| **AI / LangChain** | LangChain, Ollama, `unstructured`, `python-docx`                                                       |
 | **Observability**| Kafka, Prometheus, Grafana                                                                               |
 | **Auth**         | OAuth2 (GitHub Provider)                                                                                 |
 | **Tooling**      | Docker, Docker Compose, Uvicorn, Poetry, Pre-commit                                                      |
@@ -137,7 +137,7 @@ Follow these instructions to get the entire platform up and running on your loca
 
 1.  **Sign In:** Click the "Sign In" button and authenticate using your GitHub account.
 2.  **Upload Documents:** Navigate to the "Docs" page to upload your files.
-3.  **Chat with your AI:** Go to the "Chat" page. You can type a prompt and select a specific model to use, or choose "Agent Mode" to let the system decide.
+3.  **Chat with your AI:** Go to the "Chat" page. You can type a prompt and select a specific model to use (after downloading to your Ollama application + mapping correct directory of Ollama root folder in docker-compose.yml), or choose "Agent Mode" to let the system decide.
 4.  **Use RAG:** When chatting, select one or more of your uploaded documents from the sidebar to provide them as context to the agent.
 5.  **View History & Metrics:** Explore the "History" and "Metrics" pages to review past conversations and see live system performance.
 
@@ -148,7 +148,7 @@ The "Agent Mode" is powered by a sophisticated multi-step process:
 1.  **Triage:** A fast `llama3.1:8b` model first classifies the user's prompt as `Simple` or `Complex`. It considers a prompt complex if it requires using file context, has multiple parts, or needs chat history.
 2.  **Simple Path:** Simple prompts are sent to a `Performance-Aware Router` that chooses the most efficient model for a quick, single-shot answer.
 3.  **Complex Path (`run_multi_agent_workflow`):**
-    *   **Smart Context Retrieval:** The system checks the size of the selected files. Small files are read entirely ("Direct Read") for maximum accuracy. Large files are processed via a vector search ("Chunked RAG") for scalability.
+    *   **Smart Context Retrieval:** The system checks the size of the selected files. All files are processed via a vector search ("Chunked RAG") for scalability.
     *   **Goal-Oriented Planning:** A Planner LLM deconstructs the user's request into a checklist of goals.
     *   **Iterative Execution:** The Planner loops, checking its progress against the checklist. In each loop, it picks the next unfinished task and selects the best "Worker" LLM for that job (e.g., `codellama` for code, `gemma` for simple extraction).
     *   **Completion:** Once all items on the checklist are satisfied by observations in its history, the agent synthesizes the results into a final answer and stops.
@@ -161,7 +161,7 @@ The "Agent Mode" is powered by a sophisticated multi-step process:
 
 ## Project Journey & Challenges
 
-The inspiration for this project came from discovering Ollama and a curiosity to compare local open-source LLMs against cloud giants like ChatGPT and Claude. I wanted to understand the full stack, from hardware to a custom UI.
+The inspiration for this project came from discovering Ollama and a curiosity to compare local open-source LLMs against cloud giants like ChatGPT, Gemini and Claude. I wanted to understand the full stack, from hardware to a custom UI.
 
 This initial curiosity quickly evolved into building a private, full-stack AI platform. I started with the RAG concept, allowing users to select specific files as context. Next, I added the agentic workflow with its router model to handle varying prompt complexity. The frontend was built with Next.js and TypeScript, and secure GitHub OAuth2 was added for access control. Finally, to understand performance, I integrated a full observability stack with Kafka, Prometheus, and Grafana.
 
